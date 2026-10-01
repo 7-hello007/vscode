@@ -1,6 +1,5 @@
 import IDEFileSystem from '../filesystem/IDEFileSystem'
 import { IDEFileEntry, IDEFileType } from '../filesystem/IDEFileSystemTypes'
-import IDEMenuBar from './IDEMenuBar'
 
 enum FileTreeAction {
   NONE = 0,
@@ -9,84 +8,237 @@ enum FileTreeAction {
   RENAME = 3
 }
 
+class FileNode {
+  entry: IDEFileEntry
+  depth: number
+  expanded: boolean = false
+  loaded: boolean = false
+  loading: boolean = false
+  children: FileNode[] = []
+
+  constructor(entry: IDEFileEntry, depth: number) {
+    this.entry = entry
+    this.depth = depth
+  }
+}
+
 @Component
 export default struct FileTreePanel {
   @Require fileSystem: IDEFileSystem
+  @Watch('onRootPathChanged') @Prop rootPath: string = '/'
   @Require onOpenFile: (path: string) => void
   @Require onEntryDeleted: (path: string) => void
   @Require onEntryRenamed: (oldPath: string, newPath: string) => void
-  @Prop aiVisible: boolean = true
-  @Require onSave: () => void
-  @Require onPlugins: () => void
-  @Require onEditorCommand: (command: string) => void
-  @Require onRun: () => void
-  @Require onToggleAI: () => void
-  @Require onLargerEditor: () => void
-  @Require onLargerTerminal: () => void
-  @Require onResetLayout: () => void
-  @Require onOpenVnc: () => void
-  @Require onEmulatorManagement: () => void
-  @Require onRootfsManagement: () => void
-  @Require onSharedFolder: () => void
-  @Require onSettings: () => void
-  @Require onUserGuide: () => void
 
-  @State entries: IDEFileEntry[] = []
-  @State currentDirectory: string = '/root'
-  @State pathInput: string = '/root'
+  @State visibleNodes: FileNode[] = []
+  @State currentDirectory: string = '/'
+  @State pathInput: string = '/'
   @State loading: boolean = true
   @State errorMessage: string = ''
   @State action: FileTreeAction = FileTreeAction.NONE
   @State actionName: string = ''
   @State actionTarget: string = ''
+  private rootNode: FileNode = new FileNode({
+    name: '/',
+    path: '/',
+    type: IDEFileType.DIRECTORY,
+    size: 0
+  }, 0)
 
   aboutToAppear(): void {
-    this.initialize()
+    void this.initialize()
+  }
+
+  private onRootPathChanged(): void {
+    void this.initialize()
   }
 
   private async initialize(): Promise<void> {
-    try {
-      this.currentDirectory = await this.fileSystem.resolveHomeDirectory()
-      this.pathInput = this.currentDirectory
-    } catch (error) {
-      this.currentDirectory = '/root'
-      this.pathInput = '/root'
-    }
-    await this.refreshDirectory()
-  }
-
-  private async refreshDirectory(): Promise<void> {
+    const normalizedRoot = this.fileSystem.normalizePath(this.rootPath)
+    this.rootNode = new FileNode({
+      name: this.fileSystem.baseName(normalizedRoot),
+      path: normalizedRoot,
+      type: IDEFileType.DIRECTORY,
+      size: 0
+    }, 0)
+    this.currentDirectory = normalizedRoot
+    this.pathInput = normalizedRoot
+    this.rootNode.expanded = true
     this.loading = true
     this.errorMessage = ''
     try {
-      this.entries = await this.fileSystem.listDirectory(this.currentDirectory)
-      this.pathInput = this.currentDirectory
+      await this.loadChildren(this.rootNode, true)
+      this.rebuildVisibleNodes()
     } catch (error) {
-      this.entries = []
       this.errorMessage = (error as Error).message
     } finally {
       this.loading = false
     }
   }
 
-  private async openPath(path: string): Promise<void> {
+  private rebuildVisibleNodes(): void {
+    const result: FileNode[] = []
+    this.appendVisibleNode(this.rootNode, result)
+    this.visibleNodes = result
+  }
+
+  private appendVisibleNode(node: FileNode, result: FileNode[]): void {
+    result.push(node)
+    if (!node.expanded) {
+      return
+    }
+    for (const child of node.children) {
+      this.appendVisibleNode(child, result)
+    }
+  }
+
+  private findNode(path: string, node: FileNode = this.rootNode): FileNode | null {
+    if (node.entry.path === path) {
+      return node
+    }
+    for (const child of node.children) {
+      const match = this.findNode(path, child)
+      if (match) {
+        return match
+      }
+    }
+    return null
+  }
+
+  private findChild(node: FileNode, path: string): FileNode | null {
+    for (const child of node.children) {
+      if (child.entry.path === path) {
+        return child
+      }
+    }
+    return null
+  }
+
+  private mergeChildren(parent: FileNode, entries: IDEFileEntry[]): FileNode[] {
+    const merged: FileNode[] = []
+    for (const entry of entries) {
+      const existing = this.findChild(parent, entry.path)
+      if (existing) {
+        existing.entry = entry
+        existing.depth = parent.depth + 1
+        merged.push(existing)
+      } else {
+        merged.push(new FileNode(entry, parent.depth + 1))
+      }
+    }
+    return merged
+  }
+
+  private async loadChildren(node: FileNode, force: boolean = false): Promise<void> {
+    if (node.entry.type !== IDEFileType.DIRECTORY || (node.loaded && !force)) {
+      return
+    }
+    node.loading = true
+    this.rebuildVisibleNodes()
     try {
-      this.currentDirectory = this.fileSystem.normalizePath(path)
-      this.pathInput = this.currentDirectory
-      this.cancelAction()
-      await this.refreshDirectory()
+      const entries = await this.fileSystem.listDirectory(node.entry.path)
+      node.children = this.mergeChildren(node, entries)
+      node.loaded = true
+    } finally {
+      node.loading = false
+      this.rebuildVisibleNodes()
+    }
+  }
+
+  private async refreshLoadedNode(node: FileNode): Promise<void> {
+    if (!node.loaded || node.entry.type !== IDEFileType.DIRECTORY) {
+      return
+    }
+    await this.loadChildren(node, true)
+    for (const child of node.children) {
+      if (child.loaded) {
+        await this.refreshLoadedNode(child)
+      }
+    }
+  }
+
+  private async refreshTree(): Promise<void> {
+    this.loading = true
+    this.errorMessage = ''
+    try {
+      await this.refreshLoadedNode(this.rootNode)
+      this.rebuildVisibleNodes()
+    } catch (error) {
+      this.errorMessage = (error as Error).message
+    } finally {
+      this.loading = false
+    }
+  }
+
+  private async revealDirectory(path: string): Promise<void> {
+    const normalized = this.fileSystem.normalizePath(path)
+    const rootPath = this.rootNode.entry.path
+    if (!this.isWithinRoot(normalized)) {
+      throw new Error('Path is outside the opened folder: ' + rootPath)
+    }
+    let current = this.rootNode
+    current.expanded = true
+    await this.loadChildren(current)
+    if (normalized !== rootPath) {
+      const relativePath = normalized.substring(rootPath === '/' ? 1 : rootPath.length + 1)
+      const parts = relativePath.split('/')
+      let currentPath = rootPath === '/' ? '' : rootPath
+      for (const part of parts) {
+        if (!part) {
+          continue
+        }
+        currentPath += '/' + part
+        const child = this.findChild(current, currentPath)
+        if (!child || child.entry.type !== IDEFileType.DIRECTORY) {
+          throw new Error('Directory not found: ' + normalized)
+        }
+        current = child
+        current.expanded = true
+        await this.loadChildren(current)
+      }
+    }
+    this.currentDirectory = normalized
+    this.pathInput = normalized
+    this.cancelAction()
+    this.rebuildVisibleNodes()
+  }
+
+  private isWithinRoot(path: string): boolean {
+    const rootPath = this.rootNode.entry.path
+    return rootPath === '/' || path === rootPath || path.startsWith(rootPath + '/')
+  }
+
+  private async openPath(path: string): Promise<void> {
+    this.errorMessage = ''
+    try {
+      await this.revealDirectory(path)
     } catch (error) {
       this.errorMessage = (error as Error).message
     }
   }
 
-  private async activateEntry(entry: IDEFileEntry): Promise<void> {
-    if (entry.type === IDEFileType.DIRECTORY) {
-      await this.openPath(entry.path)
+  private async activateNode(node: FileNode): Promise<void> {
+    if (node.entry.type === IDEFileType.DIRECTORY) {
+      this.currentDirectory = node.entry.path
+      this.pathInput = node.entry.path
+      this.cancelAction()
+      if (node.expanded) {
+        node.expanded = false
+        this.rebuildVisibleNodes()
+        return
+      }
+      this.errorMessage = ''
+      try {
+        await this.loadChildren(node)
+        node.expanded = true
+        this.rebuildVisibleNodes()
+      } catch (error) {
+        this.errorMessage = (error as Error).message
+      }
       return
     }
-    if (entry.type === IDEFileType.FILE || entry.type === IDEFileType.SYMBOLIC_LINK) {
-      this.onOpenFile(entry.path)
+    if (node.entry.type === IDEFileType.FILE || node.entry.type === IDEFileType.SYMBOLIC_LINK) {
+      this.onOpenFile(node.entry.path)
     }
   }
 
@@ -114,6 +266,16 @@ export default struct FileTreePanel {
     this.actionTarget = ''
   }
 
+  private async refreshNode(path: string): Promise<void> {
+    const node = this.findNode(path)
+    if (node && node.entry.type === IDEFileType.DIRECTORY) {
+      await this.loadChildren(node, true)
+      this.rebuildVisibleNodes()
+      return
+    }
+    await this.refreshTree()
+  }
+
   private async confirmAction(): Promise<void> {
     if (!this.actionName.trim()) {
       return
@@ -124,21 +286,27 @@ export default struct FileTreePanel {
       if (this.action === FileTreeAction.CREATE_FILE) {
         const newFilePath = await this.fileSystem.createFile(this.currentDirectory, this.actionName)
         this.cancelAction()
-        await this.refreshDirectory()
+        await this.refreshNode(this.currentDirectory)
         this.onOpenFile(newFilePath)
       } else if (this.action === FileTreeAction.CREATE_DIRECTORY) {
         await this.fileSystem.createDirectory(this.currentDirectory, this.actionName)
         this.cancelAction()
-        await this.refreshDirectory()
+        await this.refreshNode(this.currentDirectory)
       } else if (this.action === FileTreeAction.RENAME) {
         const oldPath = this.actionTarget
+        const parentPath = this.fileSystem.parentPath(oldPath)
         const newPath = await this.fileSystem.renameEntry(oldPath, this.actionName)
+        if (this.currentDirectory === oldPath || this.currentDirectory.startsWith(oldPath + '/')) {
+          this.currentDirectory = newPath + this.currentDirectory.substring(oldPath.length)
+          this.pathInput = this.currentDirectory
+        }
         this.cancelAction()
-        await this.refreshDirectory()
+        await this.refreshNode(parentPath)
         this.onEntryRenamed(oldPath, newPath)
       }
     } catch (error) {
       this.errorMessage = (error as Error).message
+    } finally {
       this.loading = false
     }
   }
@@ -172,11 +340,17 @@ export default struct FileTreePanel {
     this.loading = true
     this.errorMessage = ''
     try {
+      const parentPath = this.fileSystem.parentPath(entry.path)
       await this.fileSystem.deleteEntry(entry.path)
+      if (this.currentDirectory === entry.path || this.currentDirectory.startsWith(entry.path + '/')) {
+        this.currentDirectory = parentPath
+        this.pathInput = parentPath
+      }
       this.onEntryDeleted(entry.path)
-      await this.refreshDirectory()
+      await this.refreshNode(parentPath)
     } catch (error) {
       this.errorMessage = (error as Error).message
+    } finally {
       this.loading = false
     }
   }
@@ -204,23 +378,6 @@ export default struct FileTreePanel {
   build() {
     Column() {
       Row() {
-        IDEMenuBar({
-          aiVisible: this.aiVisible,
-          onSave: () => this.onSave(),
-          onPlugins: () => this.onPlugins(),
-          onEditorCommand: (command: string) => this.onEditorCommand(command),
-          onRun: () => this.onRun(),
-          onToggleAI: () => this.onToggleAI(),
-          onLargerEditor: () => this.onLargerEditor(),
-          onLargerTerminal: () => this.onLargerTerminal(),
-          onResetLayout: () => this.onResetLayout(),
-          onOpenVnc: () => this.onOpenVnc(),
-          onEmulatorManagement: () => this.onEmulatorManagement(),
-          onRootfsManagement: () => this.onRootfsManagement(),
-          onSharedFolder: () => this.onSharedFolder(),
-          onSettings: () => this.onSettings(),
-          onUserGuide: () => this.onUserGuide()
-        })
         Blank()
         Button($r('app.string.ide_new_file_short'))
           .fontSize(11)
@@ -239,7 +396,7 @@ export default struct FileTreePanel {
           .fontColor('#D7DAE0')
           .backgroundColor(Color.Transparent)
           .padding({ left: 5, right: 5 })
-          .onClick(() => this.refreshDirectory())
+          .onClick(() => this.refreshTree())
       }
       .width('100%')
       .height(36)
@@ -256,7 +413,7 @@ export default struct FileTreePanel {
           .backgroundColor('#292D35')
           .height(28)
           .padding({ left: 8, right: 8 })
-          .enabled(this.currentDirectory !== '/')
+          .enabled(this.currentDirectory !== this.rootNode.entry.path)
           .onClick(() => this.openPath(this.fileSystem.parentPath(this.currentDirectory)))
 
         TextInput({ text: this.pathInput })
@@ -320,7 +477,7 @@ export default struct FileTreePanel {
         .width('100%')
         .layoutWeight(1)
         .justifyContent(FlexAlign.Center)
-      } else if (this.errorMessage) {
+      } else if (this.errorMessage && this.visibleNodes.length === 0) {
         Column({ space: 10 }) {
           Text($r('app.string.ide_file_service_unavailable'))
             .fontSize(13)
@@ -332,68 +489,84 @@ export default struct FileTreePanel {
             .textAlign(TextAlign.Center)
             .maxLines(4)
           Button($r('app.string.btn_retry'))
-            .onClick(() => this.refreshDirectory())
+            .onClick(() => this.initialize())
         }
         .width('100%')
         .layoutWeight(1)
         .padding({ left: 14, right: 14 })
         .justifyContent(FlexAlign.Center)
-      } else if (this.entries.length === 0) {
-        Column({ space: 8 }) {
-          SymbolGlyph($r('sys.symbol.folder'))
-            .fontSize(28)
-            .fontColor(['#7E8794'])
-          Text($r('app.string.ide_empty_directory'))
-            .fontSize(12)
-            .fontColor('#8F98A6')
-        }
-        .width('100%')
-        .layoutWeight(1)
-        .justifyContent(FlexAlign.Center)
       } else {
+        if (this.errorMessage) {
+          Text(this.errorMessage)
+            .fontSize(10)
+            .fontColor('#E5A5A5')
+            .maxLines(2)
+            .padding({ left: 8, right: 8, bottom: 4 })
+        }
         List() {
-          ForEach(this.entries, (entry: IDEFileEntry) => {
+          ForEach(this.visibleNodes, (node: FileNode) => {
             ListItem() {
-              Row({ space: 8 }) {
-                SymbolGlyph(entry.type === IDEFileType.DIRECTORY ?
-                  $r('sys.symbol.folder_fill') : $r('sys.symbol.doc'))
-                  .fontSize(19)
-                  .fontColor([entry.type === IDEFileType.DIRECTORY ? '#D5B46A' : '#9AA5B5'])
+              Row({ space: 5 }) {
+                if (node.entry.type === IDEFileType.DIRECTORY) {
+                  if (node.loading) {
+                    LoadingProgress()
+                      .width(13)
+                      .height(13)
+                      .color('#8F98A6')
+                  } else {
+                    Text(node.expanded ? '⌄' : '›')
+                      .width(13)
+                      .fontSize(15)
+                      .fontColor('#8F98A6')
+                      .textAlign(TextAlign.Center)
+                  }
+                } else {
+                  Blank().width(13)
+                }
 
-                Column({ space: 2 }) {
-                  Text(entry.name)
+                SymbolGlyph(node.entry.type === IDEFileType.DIRECTORY ?
+                  (node.expanded ? $r('sys.symbol.folder_fill') : $r('sys.symbol.folder')) :
+                  $r('sys.symbol.doc'))
+                  .fontSize(17)
+                  .fontColor([node.entry.type === IDEFileType.DIRECTORY ? '#D5B46A' : '#9AA5B5'])
+
+                Column({ space: 1 }) {
+                  Text(node.entry.name)
                     .fontSize(12)
                     .fontColor('#D7DAE0')
                     .maxLines(1)
                     .textOverflow({ overflow: TextOverflow.Ellipsis })
-                  Text(this.fileTypeLabel(entry))
+                  Text(this.fileTypeLabel(node.entry))
                     .fontSize(9)
                     .fontColor('#747E8C')
                 }
                 .layoutWeight(1)
                 .alignItems(HorizontalAlign.Start)
 
-                Text('⋮')
-                  .fontSize(18)
-                  .fontColor('#8F98A6')
-                  .padding({ left: 5, right: 5 })
-                  .bindMenu([
-                    {
-                      value: $r('app.string.btn_rename'),
-                      action: () => this.startRename(entry)
-                    },
-                    {
-                      value: $r('app.string.delete_this'),
-                      action: () => this.confirmDelete(entry)
-                    }
-                  ])
+                if (node.entry.path !== this.rootNode.entry.path) {
+                  Text('⋮')
+                    .fontSize(18)
+                    .fontColor('#8F98A6')
+                    .padding({ left: 5, right: 5 })
+                    .bindMenu([
+                      {
+                        value: $r('app.string.btn_rename'),
+                        action: () => this.startRename(node.entry)
+                      },
+                      {
+                        value: $r('app.string.delete_this'),
+                        action: () => this.confirmDelete(node.entry)
+                      }
+                    ])
+                }
               }
               .width('100%')
-              .height(44)
-              .padding({ left: 10, right: 5 })
-              .onClick(() => this.activateEntry(entry))
+              .height(40)
+              .padding({ left: 7 + node.depth * 14, right: 5 })
+              .backgroundColor(node.entry.path === this.currentDirectory ? '#222831' : Color.Transparent)
+              .onClick(() => this.activateNode(node))
             }
-          }, (entry: IDEFileEntry): string => entry.path)
+          }, (node: FileNode): string => node.entry.path)
         }
         .width('100%')
         .layoutWeight(1)

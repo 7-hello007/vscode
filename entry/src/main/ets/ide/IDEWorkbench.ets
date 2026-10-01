@@ -4,10 +4,12 @@ import { ideAIProviderRegistry } from './ai/IDEAIProviderRegistry'
 import AIAssistantPanel from './components/AIAssistantPanel'
 import CodeEditorPanel from './components/CodeEditorPanel'
 import FileTreePanel from './components/FileTreePanel'
+import IDEMenuBar from './components/IDEMenuBar'
 import IDEPluginManagerPanel from './components/IDEPluginManagerPanel'
 import IDEStatusBar from './components/IDEStatusBar'
 import TerminalPanel from './components/TerminalPanel'
 import IDEFileSystem from './filesystem/IDEFileSystem'
+import { IDEFileSystemError } from './filesystem/IDEFileSystemTypes'
 import { IDEEditorTab } from './model/IDEEditorTab'
 import {
   IDEAIContext,
@@ -54,9 +56,14 @@ export default struct IDEWorkbench {
   @State editorBusy: boolean = false
   @State editorStatus: string = ''
   @State runBusy: boolean = false
+  @State fileTreeVisible: boolean = true
+  @State terminalVisible: boolean = true
   @State aiVisible: boolean = true
+  @State terminalExtraKeysVisible: boolean = false
   @State editorWeight: number = 3
   @State terminalWeight: number = 2
+  @State fileTreeWidth: number = 202
+  @State aiPanelWidth: number = 280
   @State editorCommandRequest: string = ''
   @State editorCommandSequence: number = 0
   @State pluginStates: IDEPluginState[] = this.pluginRegistry.list()
@@ -71,7 +78,15 @@ export default struct IDEWorkbench {
   @State editorEncoding: string = 'UTF-8'
   @State editorLineEnding: string = 'LF'
   @State terminalOutput: string = ''
+  @State fileTreeRootPath: string = '/'
+  @State openFolderPath: string = '/'
+  @State openFolderError: string = ''
+  @State openFolderBusy: boolean = false
   private aiMessageSequence: number = 0
+  private openingFilePaths: string[] = []
+  private fileTreeResizeStartWidth: number = 202
+  private aiPanelResizeStartWidth: number = 280
+  private editorResizeStartWeight: number = 3
 
   private pluginController: CustomDialogController = new CustomDialogController({
     builder: CustomContentDialog({
@@ -87,7 +102,32 @@ export default struct IDEWorkbench {
     })
   })
 
+  private openFolderController: CustomDialogController = new CustomDialogController({
+    builder: CustomContentDialog({
+      primaryTitle: $r('app.string.ide_menu_open_folder'),
+      contentBuilder: () => {
+        this.buildOpenFolderDialog()
+      },
+      buttons: [
+        {
+          value: $r('app.string.setting_generic_cancel'),
+          buttonStyle: ButtonStyleMode.TEXTUAL,
+          action: (): void => this.openFolderController.close()
+        },
+        {
+          value: $r('app.string.ide_menu_open_folder'),
+          buttonStyle: ButtonStyleMode.TEXTUAL,
+          action: (): void => { void this.confirmOpenFolder() }
+        }
+      ]
+    })
+  })
+
   aboutToAppear(): void {
+    if (this.compactLayout) {
+      this.fileTreeWidth = 162
+      this.aiPanelWidth = 220
+    }
     this.aiProviders = ideAIProviderRegistry.list()
     if (!this.activeAIProviderId) {
       for (const provider of this.aiProviders) {
@@ -105,28 +145,54 @@ export default struct IDEWorkbench {
       this.editorStatus = ''
       return
     }
+    if (!path || this.isOpeningFile(path)) {
+      return
+    }
 
+    this.openingFilePaths.push(path)
     this.editorBusy = true
     this.editorStatus = ''
     try {
       const content = await this.fileSystem.readFile(path)
-      const newTabs = this.editorTabs.slice()
-      newTabs.push(new IDEEditorTab(path, content))
-      this.editorTabs = newTabs
+      if (!this.findTab(path)) {
+        const newTabs = this.editorTabs.slice()
+        newTabs.push(new IDEEditorTab(path, content))
+        this.replaceEditorTabs(newTabs)
+      }
       this.activeFilePath = path
     } catch (error) {
       this.editorStatus = (error as Error).message
       this.getUIContext().getPromptAction().showToast({ message: $r('app.string.ide_open_failed') })
     } finally {
-      this.editorBusy = false
+      this.removeOpeningFile(path)
+      this.editorBusy = this.openingFilePaths.length > 0
+    }
+  }
+
+  private isOpeningFile(path: string): boolean {
+    for (const openingPath of this.openingFilePaths) {
+      if (openingPath === path) return true
+    }
+    return false
+  }
+
+  private removeOpeningFile(path: string): void {
+    const index = this.openingFilePaths.indexOf(path)
+    if (index !== -1) {
+      this.openingFilePaths.splice(index, 1)
     }
   }
 
   private selectTab(path: string): void {
-    if (this.findTab(path)) {
-      this.activeFilePath = path
-      this.editorStatus = ''
+    if (!this.findTab(path) || path === this.activeFilePath) {
+      return
     }
+    const activeTab = this.findTab(this.activeFilePath)
+    if (activeTab?.dirty) {
+      void this.saveFile(activeTab.path, activeTab.content)
+    }
+    this.activeFilePath = path
+    this.editorStatus = ''
   }
 
   private requestCloseTab(path: string): void {
@@ -170,7 +236,7 @@ export default struct IDEWorkbench {
         remaining.push(tab)
       }
     }
-    this.editorTabs = remaining
+    this.replaceEditorTabs(remaining)
     if (this.activeFilePath === path) {
       if (remaining.length === 0) {
         this.activeFilePath = ''
@@ -187,12 +253,13 @@ export default struct IDEWorkbench {
     for (const tab of this.editorTabs) {
       updated.push(tab.path === path ? new IDEEditorTab(tab.path, content, true) : tab)
     }
-    this.editorTabs = updated
+    this.replaceEditorTabs(updated)
     this.editorStatus = ''
   }
 
   private async saveFile(path: string, content: string): Promise<void> {
-    if (!this.findTab(path) || this.editorBusy) {
+    const tab = this.findTab(path)
+    if (!tab || !tab.dirty || this.editorBusy) {
       return
     }
     this.updateEditorContent(path, content)
@@ -204,7 +271,7 @@ export default struct IDEWorkbench {
       for (const tab of this.editorTabs) {
         updated.push(tab.path === path ? new IDEEditorTab(tab.path, content, false) : tab)
       }
-      this.editorTabs = updated
+      this.replaceEditorTabs(updated)
       this.editorStatus = this.getUIContext().getHostContext()?.resourceManager
         .getStringByNameSync('ide_saved') || 'Saved'
     } catch (error) {
@@ -237,7 +304,7 @@ export default struct IDEWorkbench {
           updated.push(currentTab.path === tab.path ?
             new IDEEditorTab(currentTab.path, currentTab.content, false) : currentTab)
         }
-        this.editorTabs = updated
+        this.replaceEditorTabs(updated)
       }
       this.terminalRunner.send(command)
       const prefix = this.getUIContext().getHostContext()?.resourceManager
@@ -269,9 +336,82 @@ export default struct IDEWorkbench {
   }
 
   private resetPanelLayout(): void {
+    this.fileTreeVisible = true
+    this.terminalVisible = true
     this.aiVisible = true
+    this.terminalExtraKeysVisible = false
     this.editorWeight = 3
     this.terminalWeight = 2
+    this.fileTreeWidth = this.compactLayout ? 162 : 202
+    this.aiPanelWidth = this.compactLayout ? 220 : 280
+  }
+
+  private resizeFileTree(offset: number): void {
+    const minimum = this.compactLayout ? 140 : 160
+    const maximum = this.compactLayout ? 262 : 322
+    this.fileTreeWidth = Math.max(minimum, Math.min(maximum, this.fileTreeResizeStartWidth + offset))
+  }
+
+  private resizeAIPanel(offset: number): void {
+    const minimum = this.compactLayout ? 180 : 220
+    const maximum = this.compactLayout ? 320 : 360
+    this.aiPanelWidth = Math.max(minimum, Math.min(maximum, this.aiPanelResizeStartWidth - offset))
+  }
+
+  private resizeEditorTerminal(offset: number): void {
+    this.editorWeight = Math.max(1, Math.min(4, this.editorResizeStartWeight + offset / 48))
+    this.terminalWeight = 5 - this.editorWeight
+  }
+
+  private openFolderDialog(): void {
+    this.openFolderPath = this.fileTreeRootPath
+    this.openFolderError = ''
+    this.openFolderBusy = false
+    this.openFolderController.open()
+  }
+
+  private async confirmOpenFolder(): Promise<void> {
+    if (this.openFolderBusy) {
+      return
+    }
+    this.openFolderBusy = true
+    this.openFolderError = ''
+    try {
+      const normalized = this.fileSystem.normalizePath(this.openFolderPath.trim())
+      await this.fileSystem.listDirectory(normalized)
+      this.fileTreeRootPath = normalized
+      this.fileTreeVisible = true
+      this.openFolderController.close()
+    } catch (error) {
+      if (error instanceof IDEFileSystemError && error.status === 20) {
+        this.openFolderError = this.getUIContext().getHostContext()?.resourceManager
+          .getStringByNameSync('ide_open_folder_invalid') || 'The path does not exist or is not a directory.'
+      } else {
+        this.openFolderError = (error as Error).message
+      }
+    } finally {
+      this.openFolderBusy = false
+    }
+  }
+
+  private showPluginInfo(plugin: IDEPluginState): void {
+    const capabilities: string[] = []
+    for (const capability of plugin.manifest.capabilities) {
+      capabilities.push(capability)
+    }
+    const details = plugin.manifest.version + '\n\n' + plugin.manifest.description +
+      (capabilities.length > 0 ? '\n\n' + capabilities.join(', ') : '')
+    this.getUIContext().showAlertDialog({
+      title: plugin.manifest.name,
+      message: details,
+      autoCancel: true,
+      alignment: DialogAlignment.Center,
+      buttons: [{
+        value: $r('app.string.SettingComplete_label'),
+        action: () => {
+        }
+      }]
+    })
   }
 
   private setPluginEnabled(id: string, enabled: boolean): void {
@@ -373,8 +513,46 @@ export default struct IDEWorkbench {
   private buildPluginManager() {
     IDEPluginManagerPanel({
       plugins: this.pluginStates,
-      onEnabledChange: (id: string, enabled: boolean) => this.setPluginEnabled(id, enabled)
+      onEnabledChange: (id: string, enabled: boolean) => this.setPluginEnabled(id, enabled),
+      onShowInfo: (plugin: IDEPluginState) => this.showPluginInfo(plugin)
     })
+  }
+
+  @Builder
+  private buildOpenFolderDialog() {
+    Column({ space: 10 }) {
+      Text($r('app.string.ide_open_folder_path_hint'))
+        .fontSize(11)
+        .fontColor('#8F98A6')
+        .width('100%')
+      TextInput({ text: this.openFolderPath, placeholder: '/' })
+        .fontSize(13)
+        .fontColor('#D7DAE0')
+        .backgroundColor('#101216')
+        .width('100%')
+        .height(36)
+        .onChange((value: string) => {
+          this.openFolderPath = value
+          this.openFolderError = ''
+        })
+        .onSubmit(() => { void this.confirmOpenFolder() })
+      if (this.openFolderBusy) {
+        LoadingProgress()
+          .width(20)
+          .height(20)
+          .color('#8F98A6')
+      }
+      if (this.openFolderError) {
+        Text(this.openFolderError)
+          .fontSize(11)
+          .fontColor('#E5A5A5')
+          .width('100%')
+          .maxLines(3)
+      }
+    }
+    .width('100%')
+    .padding({ top: 6, bottom: 6 })
+    .alignItems(HorizontalAlign.Start)
   }
 
   private entryDeleted(path: string): void {
@@ -389,7 +567,7 @@ export default struct IDEWorkbench {
         remaining.push(tab)
       }
     }
-    this.editorTabs = remaining
+    this.replaceEditorTabs(remaining)
     if (activeWasDeleted) {
       this.activeFilePath = remaining.length > 0 ? remaining[0].path : ''
     }
@@ -406,7 +584,7 @@ export default struct IDEWorkbench {
         updated.push(tab)
       }
     }
-    this.editorTabs = updated
+    this.replaceEditorTabs(updated)
     if (this.activeFilePath === oldPath) {
       this.activeFilePath = newPath
     } else if (this.activeFilePath.startsWith(oldPath + '/')) {
@@ -423,6 +601,18 @@ export default struct IDEWorkbench {
     return null
   }
 
+  private replaceEditorTabs(tabs: IDEEditorTab[]): void {
+    const uniqueTabs: IDEEditorTab[] = []
+    const paths: string[] = []
+    for (const tab of tabs) {
+      if (tab.path && paths.indexOf(tab.path) === -1) {
+        paths.push(tab.path)
+        uniqueTabs.push(tab)
+      }
+    }
+    this.editorTabs = uniqueTabs
+  }
+
   private findTabIndex(path: string): number {
     for (let index = 0; index < this.editorTabs.length; index++) {
       if (this.editorTabs[index].path === path) {
@@ -432,36 +622,109 @@ export default struct IDEWorkbench {
     return -1
   }
 
+  @Builder
+  private panelToggleButton(icon: Resource, active: boolean, label: Resource, action: () => void) {
+    Button({ type: ButtonType.Normal, stateEffect: true }) {
+      SymbolGlyph(icon)
+        .fontSize(18)
+        .fontColor([active ? '#D9E2F2' : '#7E8794'])
+    }
+    .width(34)
+    .height(34)
+    .padding(0)
+    .margin({ left: 2, right: 2, top: 2, bottom: 2 })
+    .backgroundColor(Color.Transparent)
+    .accessibilityText(label)
+    .onClick(action)
+  }
+
+  @Builder
+  private pluginButton() {
+    Button({ type: ButtonType.Normal, stateEffect: true }) {
+      SymbolGlyph($r('sys.symbol.dot_grid_2x2'))
+        .fontSize(18)
+        .fontColor(['#8F98A6'])
+    }
+    .width(34)
+    .height(34)
+    .padding(0)
+    .margin({ left: 2, right: 2, top: 8 })
+    .backgroundColor(Color.Transparent)
+    .accessibilityText($r('app.string.ide_plugins_title'))
+    .onClick(() => this.pluginController.open())
+  }
+
   build() {
     Column() {
       Row() {
-        FileTreePanel({
-          fileSystem: this.fileSystem,
-          onOpenFile: (path: string) => this.openFile(path),
-          onEntryDeleted: (path: string) => this.entryDeleted(path),
-          onEntryRenamed: (oldPath: string, newPath: string) => this.entryRenamed(oldPath, newPath),
-          aiVisible: this.aiVisible,
-          onSave: (): void => this.saveActiveFile(),
-          onPlugins: (): void => this.pluginController.open(),
-          onEditorCommand: (command: string): void => this.issueEditorCommand(command),
-          onRun: (): void => { void this.runActiveFile() },
-          onToggleAI: (): void => { this.aiVisible = !this.aiVisible },
-          onLargerEditor: (): void => this.resizeEditor(1),
-          onLargerTerminal: (): void => this.resizeEditor(-1),
-          onResetLayout: (): void => this.resetPanelLayout(),
-          onOpenVnc: (): void => this.onOpenVnc(),
-          onEmulatorManagement: (): void => this.onEmulatorManagement(),
-          onRootfsManagement: (): void => this.onRootfsManagement(),
-          onSharedFolder: (): void => this.onSharedFolder(),
-          onSettings: (): void => this.onSettings(),
-          onUserGuide: (): void => this.onUserGuide()
-        })
-          .width(this.compactLayout ? 200 : 240)
+        Column() {
+          IDEMenuBar({
+            fileTreeVisible: this.fileTreeVisible,
+            terminalVisible: this.terminalVisible,
+            aiVisible: this.aiVisible,
+            terminalExtraKeysVisible: this.terminalExtraKeysVisible,
+            onSave: (): void => this.saveActiveFile(),
+            onOpenFolder: (): void => this.openFolderDialog(),
+            onPlugins: (): void => this.pluginController.open(),
+            onEditorCommand: (command: string): void => this.issueEditorCommand(command),
+            onRun: (): void => { void this.runActiveFile() },
+            onToggleFileTree: (): void => { this.fileTreeVisible = !this.fileTreeVisible },
+            onToggleTerminal: (): void => { this.terminalVisible = !this.terminalVisible },
+            onToggleAI: (): void => { this.aiVisible = !this.aiVisible },
+            onToggleTerminalExtraKeys: (): void => {
+              this.terminalExtraKeysVisible = !this.terminalExtraKeysVisible
+            },
+            onLargerEditor: (): void => this.resizeEditor(1),
+            onLargerTerminal: (): void => this.resizeEditor(-1),
+            onResetLayout: (): void => this.resetPanelLayout(),
+            onOpenVnc: (): void => this.onOpenVnc(),
+            onEmulatorManagement: (): void => this.onEmulatorManagement(),
+            onRootfsManagement: (): void => this.onRootfsManagement(),
+            onSharedFolder: (): void => this.onSharedFolder(),
+            onSettings: (): void => this.onSettings(),
+            onUserGuide: (): void => this.onUserGuide()
+          })
 
-        Row()
-          .width(1)
-          .height('100%')
-          .backgroundColor('#30343B')
+          Column({ space: 6 }) {
+            this.panelToggleButton($r('sys.symbol.folder'), this.fileTreeVisible,
+              this.fileTreeVisible ? $r('app.string.ide_menu_hide_explorer') :
+                $r('app.string.ide_menu_show_explorer'),
+              (): void => { this.fileTreeVisible = !this.fileTreeVisible })
+            this.panelToggleButton($r('sys.symbol.code'), this.terminalVisible,
+              this.terminalVisible ? $r('app.string.ide_menu_hide_terminal') :
+                $r('app.string.ide_menu_show_terminal'),
+              (): void => { this.terminalVisible = !this.terminalVisible })
+            this.panelToggleButton($r('sys.symbol.wand_and_stars'), this.aiVisible,
+              this.aiVisible ? $r('app.string.ide_menu_hide_ai') : $r('app.string.ide_menu_show_ai'),
+              (): void => { this.aiVisible = !this.aiVisible })
+            this.pluginButton()
+          }
+          .margin({ top: 8 })
+        }
+        .width(38)
+        .height('100%')
+        .backgroundColor('#181B20')
+
+        if (this.fileTreeVisible) {
+          FileTreePanel({
+            fileSystem: this.fileSystem,
+            rootPath: this.fileTreeRootPath,
+            onOpenFile: (path: string) => this.openFile(path),
+            onEntryDeleted: (path: string) => this.entryDeleted(path),
+            onEntryRenamed: (oldPath: string, newPath: string) => this.entryRenamed(oldPath, newPath)
+          })
+            .width(this.fileTreeWidth)
+
+          Row()
+            .width(10)
+            .height('100%')
+            .backgroundColor('#252930')
+            .gesture(
+              PanGesture({ direction: PanDirection.Horizontal, distance: 1 })
+                .onActionStart(() => this.fileTreeResizeStartWidth = this.fileTreeWidth)
+                .onActionUpdate((event: GestureEvent) => this.resizeFileTree(event.offsetX))
+            )
+        }
 
         Column() {
           CodeEditorPanel({
@@ -480,30 +743,44 @@ export default struct IDEWorkbench {
             onStatusChange: (line: number, column: number, encoding: string, lineEnding: string) =>
               this.updateEditorStatus(line, column, encoding, lineEnding)
           })
-            .layoutWeight(this.editorWeight)
+            .layoutWeight(this.terminalVisible ? this.editorWeight : 1)
 
-          Row()
-            .width('100%')
-            .height(1)
-            .backgroundColor('#30343B')
+          if (this.terminalVisible) {
+            Row()
+              .width('100%')
+              .height(10)
+              .backgroundColor('#252930')
+              .gesture(
+                PanGesture({ direction: PanDirection.Vertical, distance: 1 })
+                  .onActionStart(() => this.editorResizeStartWeight = this.editorWeight)
+                  .onActionUpdate((event: GestureEvent) => this.resizeEditorTerminal(event.offsetY))
+              )
 
-          TerminalPanel({
-            virtKeyEnabled: this.terminalVirtualKeys,
-            canRun: this.activeFilePath.length > 0 && !this.editorBusy,
-            running: this.runBusy,
-            onRun: () => this.runActiveFile(),
-            onOutput: (output: string) => this.appendTerminalOutput(output)
-          })
-            .layoutWeight(this.terminalWeight)
+            TerminalPanel({
+              virtKeyEnabled: this.terminalVirtualKeys,
+              extraKeysVisible: this.terminalExtraKeysVisible,
+              canRun: this.activeFilePath.length > 0 && !this.editorBusy,
+              running: this.runBusy,
+              onRun: () => this.runActiveFile(),
+              onOutput: (output: string) => this.appendTerminalOutput(output)
+            })
+              .layoutWeight(this.terminalWeight)
+              .margin({ left: 6 })
+          }
         }
         .height('100%')
         .layoutWeight(1)
 
         if (this.aiVisible) {
           Row()
-            .width(1)
+            .width(10)
             .height('100%')
-            .backgroundColor('#30343B')
+            .backgroundColor('#252930')
+            .gesture(
+              PanGesture({ direction: PanDirection.Horizontal, distance: 1 })
+                .onActionStart(() => this.aiPanelResizeStartWidth = this.aiPanelWidth)
+                .onActionUpdate((event: GestureEvent) => this.resizeAIPanel(event.offsetX))
+            )
 
           AIAssistantPanel({
             context: this.buildAIContext(),
@@ -514,7 +791,7 @@ export default struct IDEWorkbench {
             onProviderSelected: (id: string) => this.activeAIProviderId = id,
             onSend: (prompt: string) => this.sendAIRequest(prompt)
           })
-            .width(this.compactLayout ? 220 : 280)
+            .width(this.aiPanelWidth)
         }
       }
       .width('100%')

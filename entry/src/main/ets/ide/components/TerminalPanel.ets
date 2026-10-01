@@ -6,6 +6,7 @@ const IDE_TERMINAL_OUTPUT_SUBSCRIBER = 'IDE.TerminalPanel.AIContext'
 @Component
 export default struct TerminalPanel {
   @Require virtKeyEnabled: boolean
+  @Prop extraKeysVisible: boolean = false
   @Require onRun: () => void
   @Prop canRun: boolean = false
   @Prop running: boolean = false
@@ -66,7 +67,11 @@ export default struct TerminalPanel {
       .padding({ left: 12, right: 12 })
       .backgroundColor('#181B20')
 
-      WebTerminal({ virtKeyEnabled: this.virtKeyEnabled })
+      WebTerminal({
+        virtKeyEnabled: this.virtKeyEnabled || this.extraKeysVisible,
+        externalVirtualKeyControl: true,
+        externalVirtualKeysVisible: this.extraKeysVisible
+      })
         .layoutWeight(1)
     }
     .width('100%')

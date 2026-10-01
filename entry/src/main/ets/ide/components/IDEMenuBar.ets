@@ -11,12 +11,19 @@ enum IDEMainMenuSection {
 
 @Component
 export default struct IDEMenuBar {
+  @Prop fileTreeVisible: boolean = true
+  @Prop terminalVisible: boolean = true
   @Prop aiVisible: boolean = true
+  @Prop terminalExtraKeysVisible: boolean = false
   @Require onSave: () => void
+  @Require onOpenFolder: () => void
   @Require onPlugins: () => void
   @Require onEditorCommand: (command: string) => void
   @Require onRun: () => void
+  @Require onToggleFileTree: () => void
+  @Require onToggleTerminal: () => void
   @Require onToggleAI: () => void
+  @Require onToggleTerminalExtraKeys: () => void
   @Require onLargerEditor: () => void
   @Require onLargerTerminal: () => void
   @Require onResetLayout: () => void
@@ -52,6 +59,34 @@ export default struct IDEMenuBar {
     return $r('app.string.ide_menu_help')
   }
 
+  private actionCount(): number {
+    if (this.activeSection === IDEMainMenuSection.FILE) return 3
+    if (this.activeSection === IDEMainMenuSection.EDIT) return 4
+    if (this.activeSection === IDEMainMenuSection.SELECTION) return 1
+    if (this.activeSection === IDEMainMenuSection.VIEW) return 6
+    if (this.activeSection === IDEMainMenuSection.GO) return 2
+    if (this.activeSection === IDEMainMenuSection.RUN) return 1
+    if (this.activeSection === IDEMainMenuSection.TERMINAL) return 7
+    return 1
+  }
+
+  private popupWidth(): number {
+    if (!this.actionsVisible) return 160
+    if (this.activeSection === IDEMainMenuSection.TERMINAL ||
+      this.activeSection === IDEMainMenuSection.VIEW) return 240
+    if (this.activeSection === IDEMainMenuSection.SELECTION ||
+      this.activeSection === IDEMainMenuSection.RUN ||
+      this.activeSection === IDEMainMenuSection.HELP) return 200
+    return 220
+  }
+
+  private popupHeight(): number {
+    if (!this.actionsVisible) {
+      return 280
+    }
+    return Math.min(280, 39 + this.actionCount() * 34)
+  }
+
   @Builder
   private sectionButton(label: Resource, section: IDEMainMenuSection) {
     Button(label, { buttonStyle: ButtonStyleMode.TEXTUAL })
@@ -79,6 +114,7 @@ export default struct IDEMenuBar {
     Column() {
       if (this.activeSection === IDEMainMenuSection.FILE) {
         this.actionButton($r('app.string.ide_menu_save'), () => this.onSave())
+        this.actionButton($r('app.string.ide_menu_open_folder'), () => this.onOpenFolder())
         this.actionButton($r('app.string.ide_menu_plugins'), () => this.onPlugins())
       } else if (this.activeSection === IDEMainMenuSection.EDIT) {
         this.actionButton($r('app.string.ide_menu_undo'), () => this.onEditorCommand('undo'))
@@ -88,6 +124,10 @@ export default struct IDEMenuBar {
       } else if (this.activeSection === IDEMainMenuSection.SELECTION) {
         this.actionButton($r('app.string.ide_menu_select_all'), () => this.onEditorCommand('selectAll'))
       } else if (this.activeSection === IDEMainMenuSection.VIEW) {
+        this.actionButton(this.fileTreeVisible ? $r('app.string.ide_menu_hide_explorer') :
+          $r('app.string.ide_menu_show_explorer'), () => this.onToggleFileTree())
+        this.actionButton(this.terminalVisible ? $r('app.string.ide_menu_hide_terminal') :
+          $r('app.string.ide_menu_show_terminal'), () => this.onToggleTerminal())
         this.actionButton(this.aiVisible ? $r('app.string.ide_menu_hide_ai') :
           $r('app.string.ide_menu_show_ai'), () => this.onToggleAI())
         this.actionButton($r('app.string.ide_menu_larger_editor'), () => this.onLargerEditor())
@@ -99,6 +139,8 @@ export default struct IDEMenuBar {
       } else if (this.activeSection === IDEMainMenuSection.RUN) {
         this.actionButton($r('app.string.ide_menu_run_file'), () => this.onRun())
       } else if (this.activeSection === IDEMainMenuSection.TERMINAL) {
+        this.actionButton(this.terminalExtraKeysVisible ? $r('app.string.ide_menu_hide_extra_keys') :
+          $r('app.string.ide_menu_show_extra_keys'), () => this.onToggleTerminalExtraKeys())
         this.actionButton($r('app.string.vnc_console_title'), () => this.onOpenVnc())
         this.actionButton($r('app.string.emulator_management_title'), () => this.onEmulatorManagement())
         this.actionButton($r('app.string.image_management_title'), () => this.onRootfsManagement())
@@ -109,7 +151,7 @@ export default struct IDEMenuBar {
         this.actionButton($r('app.string.ide_menu_user_guide'), () => this.onUserGuide())
       }
     }
-    .width(220)
+    .width('100%')
     .alignItems(HorizontalAlign.Start)
   }
 
@@ -161,8 +203,8 @@ export default struct IDEMenuBar {
         .backgroundColor('#20242B')
       }
     }
-    .width(this.actionsVisible ? 240 : 160)
-    .height(280)
+    .width(this.popupWidth())
+    .height(this.popupHeight())
     .border({ width: 1, color: '#3B414B' })
     .borderRadius(6)
   }
@@ -172,8 +214,10 @@ export default struct IDEMenuBar {
       .fontSize(20)
       .fontColor('#D7DAE0')
       .height(32)
-      .width(38)
+      .width(34)
+      .margin({ left: 2, right: 2, top: 2, bottom: 2 })
       .padding(0)
+      .backgroundColor(Color.Transparent)
       .onClick(() => {
         if (!this.popupVisible) {
           this.actionsVisible = false

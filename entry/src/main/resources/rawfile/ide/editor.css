@@ -167,7 +167,13 @@ button, input { font: inherit; }
 
 #highlight {
   z-index: 1;
-  overflow: hidden;
+  right: auto;
+  bottom: auto;
+  width: max-content;
+  min-width: 100%;
+  height: auto;
+  min-height: 100%;
+  overflow: visible;
   pointer-events: none;
   color: var(--text);
   background: transparent;

@@ -29,6 +29,8 @@ const VKeyRadius = VKeyMetrics.radius;
 @Component
 export default struct WebTerminal {
   @Require virtKeyEnabled: boolean = true
+  @Prop externalVirtualKeyControl: boolean = false
+  @Prop externalVirtualKeysVisible: boolean = false
   @State ctrlPressed: boolean = false
   @State shiftPressed: boolean = false
   @State fnPressed: boolean = false
@@ -229,10 +231,16 @@ export default struct WebTerminal {
         .layoutWeight(1)
         .bindContextMenu(this.contextMenu(this.webviewController), ResponseType.RightClick)
       if (this.virtKeyEnabled) {
-        if (this.showVirtKey) {
-          this.buildVirtualKeys()
+        if (this.externalVirtualKeyControl) {
+          if (this.externalVirtualKeysVisible) {
+            this.buildVirtualKeys()
+          }
         } else {
-          this.buildShowVirtualKeysButton()
+          if (this.showVirtKey) {
+            this.buildVirtualKeys()
+          } else {
+            this.buildShowVirtualKeysButton()
+          }
         }
       }
     }
@@ -285,7 +293,9 @@ export default struct WebTerminal {
           this.buildVKey('F10', FunctionKeySequences.F10);
           this.buildVKey('F11', FunctionKeySequences.F11);
           this.buildVKey('F12', FunctionKeySequences.F12);
-          this.hideVKeyButton();
+          if (!this.externalVirtualKeyControl) {
+            this.hideVKeyButton();
+          }
         }
         .margin({ left: 5, right: 5 })
       } else {
@@ -316,7 +326,9 @@ export default struct WebTerminal {
           this.buildVKey('←', NormalKeySequences.LEFT, NormalKeySequences.LEFT_APP);
           this.buildVKey('↓', NormalKeySequences.DOWN, NormalKeySequences.DOWN_APP);
           this.buildVKey('→', NormalKeySequences.RIGHT, NormalKeySequences.RIGHT_APP);
-          this.hideVKeyButton();
+          if (!this.externalVirtualKeyControl) {
+            this.hideVKeyButton();
+          }
         }
         .margin({ left: 5, right: 5 })
       }

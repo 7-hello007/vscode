@@ -80,6 +80,7 @@ export default class EntryAbility extends UIAbility {
       if (deviceInfo.deviceType === '2in1' || deviceInfo.deviceType === 'tablet') {
         try {
           await mainWindow.setWindowLayoutFullScreen(true);
+          await mainWindow.setWindowSystemBarEnable(['navigation']);
           mainWindow.setImmersiveModeEnabledState(true);
         } catch (error) {
           hilog.warn(DOMAIN, 'testTag', 'Unable to enable immersive IDE layout: %{public}s', JSON.stringify(error));

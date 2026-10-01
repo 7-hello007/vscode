@@ -106,13 +106,6 @@ export default struct CodeEditorPanel {
     this.syncedFilePath = safePath
   }
 
-  private requestSave(): void {
-    if (!this.activeFilePath || this.busy || !this.activeTab()?.dirty) {
-      return
-    }
-    this.runEditorScript('window.hishEditor && window.hishEditor.requestSave()')
-  }
-
   onEditorReady(): void {
     this.webReady = true
     this.syncActiveDocument()
@@ -137,6 +130,25 @@ export default struct CodeEditorPanel {
         return
       }
       this.onSave(path, this.decodeBase64(encodedContent))
+    } catch (error) {
+      this.getUIContext().getPromptAction().showToast({ message: $r('app.string.ide_save_failed') })
+    }
+  }
+
+  onEditorBlurred(encodedPath: string, encodedContent: string): void {
+    try {
+      const path = this.decodeBase64(encodedPath)
+      if (!path || this.busy) {
+        return
+      }
+      for (const tab of this.tabs) {
+        if (tab.path === path) {
+          if (tab.dirty) {
+            this.onSave(path, this.decodeBase64(encodedContent))
+          }
+          return
+        }
+      }
     } catch (error) {
       this.getUIContext().getPromptAction().showToast({ message: $r('app.string.ide_save_failed') })
     }
@@ -233,20 +245,6 @@ export default struct CodeEditorPanel {
         .layoutWeight(1)
         .height(34)
 
-        if (this.statusMessage) {
-          Text(this.statusMessage)
-            .fontSize(10)
-            .fontColor('#8F98A6')
-            .maxLines(1)
-            .margin({ left: 8, right: 8 })
-        }
-
-        Button(this.busy ? $r('app.string.ide_saving') : $r('app.string.ide_save'))
-          .fontSize(10)
-          .height(26)
-          .margin({ right: 7 })
-          .enabled(!this.busy && (this.activeTab()?.dirty || false))
-          .onClick(() => this.requestSave())
       }
       .width('100%')
       .height(35)
@@ -259,8 +257,8 @@ export default struct CodeEditorPanel {
         .javaScriptProxy({
           object: this,
           name: 'editorBridge',
-          methodList: ['onEditorReady', 'onEditorContentChanged', 'onEditorSaveRequested', 'onEditorRunRequested',
-            'onEditorSelectionChanged', 'onEditorStatusChanged'],
+          methodList: ['onEditorReady', 'onEditorContentChanged', 'onEditorSaveRequested', 'onEditorBlurred',
+            'onEditorRunRequested', 'onEditorSelectionChanged', 'onEditorStatusChanged'],
           asyncMethodList: [],
           controller: this.webController,
           permission: `{

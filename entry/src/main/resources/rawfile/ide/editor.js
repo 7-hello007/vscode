@@ -4,6 +4,7 @@
   const workspace = document.getElementById('workspace');
   const editor = document.getElementById('editor');
   const highlight = document.getElementById('highlight');
+  const editorViewport = document.getElementById('editorViewport');
   const gutterContent = document.getElementById('gutterContent');
   const findBar = document.getElementById('findBar');
   const findInput = document.getElementById('findInput');
@@ -289,6 +290,21 @@
     gutterContent.style.transform = 'translateY(' + (-editor.scrollTop) + 'px)';
   }
 
+  function ensureCursorVisible() {
+    if (!filePath || editor.clientHeight <= 0) return;
+    const before = editor.value.substring(0, editor.selectionStart);
+    const lineIndex = before.split('\n').length - 1;
+    const lineHeight = parseFloat(window.getComputedStyle(editor).lineHeight) || 20;
+    const cursorTop = 10 + lineIndex * lineHeight;
+    const visibleTop = editor.scrollTop;
+    const visibleBottom = visibleTop + editor.clientHeight - 40;
+    if (cursorTop < visibleTop) {
+      editor.scrollTop = Math.max(0, cursorTop - 10);
+    } else if (cursorTop + lineHeight > visibleBottom) {
+      editor.scrollTop = cursorTop + lineHeight - editor.clientHeight + 40;
+    }
+  }
+
   function resetHistory(content) {
     window.clearTimeout(historyTimer);
     history = [content];
@@ -351,6 +367,8 @@
     gutterContent.querySelectorAll('.line-number').forEach(function (element) {
       element.classList.toggle('active', parseInt(element.dataset.number, 10) === line);
     });
+    ensureCursorVisible();
+    syncScroll();
     notifySelectionContext();
   }
 
@@ -537,6 +555,21 @@
     updateCursor();
   });
   editor.addEventListener('scroll', syncScroll);
+  editor.addEventListener('blur', function () {
+    if (!filePath) return;
+    commitHistory();
+    invokeNative('onEditorBlurred', toBase64(filePath), toBase64(fullContent));
+  });
+  if (typeof ResizeObserver === 'function') {
+    new ResizeObserver(function () {
+      ensureCursorVisible();
+      syncScroll();
+    }).observe(editorViewport);
+  }
+  window.addEventListener('resize', function () {
+    ensureCursorVisible();
+    syncScroll();
+  });
   editor.addEventListener('click', updateCursor);
   editor.addEventListener('keyup', updateCursor);
   editor.addEventListener('keydown', function (event) {

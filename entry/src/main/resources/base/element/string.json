@@ -1853,6 +1853,18 @@
       "value": "Plugins"
     },
     {
+      "name": "ide_menu_open_folder",
+      "value": "Open Folder"
+    },
+    {
+      "name": "ide_open_folder_path_hint",
+      "value": "Absolute Linux directory path, for example /root/project"
+    },
+    {
+      "name": "ide_open_folder_invalid",
+      "value": "The path does not exist or is not a directory."
+    },
+    {
       "name": "ide_menu_undo",
       "value": "Undo  Ctrl+Z"
     },
@@ -1874,11 +1886,11 @@
     },
     {
       "name": "ide_menu_show_explorer",
-      "value": "Show Explorer"
+      "value": "Show File Tree"
     },
     {
       "name": "ide_menu_hide_explorer",
-      "value": "Hide Explorer"
+      "value": "Hide File Tree"
     },
     {
       "name": "ide_menu_show_terminal",
@@ -1889,12 +1901,20 @@
       "value": "Hide Terminal"
     },
     {
+      "name": "ide_menu_show_extra_keys",
+      "value": "Show Extended Keys"
+    },
+    {
+      "name": "ide_menu_hide_extra_keys",
+      "value": "Hide Extended Keys"
+    },
+    {
       "name": "ide_menu_show_ai",
-      "value": "Show AI Placeholder"
+      "value": "Show AI Panel"
     },
     {
       "name": "ide_menu_hide_ai",
-      "value": "Hide AI Placeholder"
+      "value": "Hide AI Panel"
     },
     {
       "name": "ide_menu_larger_editor",

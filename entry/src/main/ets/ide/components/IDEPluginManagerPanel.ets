@@ -4,6 +4,7 @@ import { IDEPluginState } from '../plugin/IDEPluginContracts'
 export default struct IDEPluginManagerPanel {
   @Prop plugins: IDEPluginState[] = []
   @Require onEnabledChange: (id: string, enabled: boolean) => void
+  @Require onShowInfo: (plugin: IDEPluginState) => void
 
   build() {
     Column({ space: 12 }) {
@@ -30,16 +31,11 @@ export default struct IDEPluginManagerPanel {
           ForEach(this.plugins, (state: IDEPluginState) => {
             ListItem() {
               Row({ space: 10 }) {
-                Column({ space: 3 }) {
-                  Text(state.manifest.name + '  ' + state.manifest.version)
-                    .fontSize(13)
-                    .fontColor('#E2E5EA')
-                  Text(state.manifest.description)
-                    .fontSize(10)
-                    .fontColor('#8F98A6')
-                    .maxLines(2)
-                }
-                .alignItems(HorizontalAlign.Start)
+                Text(state.manifest.name)
+                  .fontSize(13)
+                  .fontColor('#E2E5EA')
+                  .maxLines(1)
+                  .textOverflow({ overflow: TextOverflow.Ellipsis })
                 .layoutWeight(1)
 
                 Toggle({ type: ToggleType.Switch, isOn: state.enabled })
@@ -49,6 +45,7 @@ export default struct IDEPluginManagerPanel {
               .padding(10)
               .backgroundColor('#20242B')
               .borderRadius(6)
+              .onClick(() => this.onShowInfo(state))
             }
           }, (state: IDEPluginState): string => state.manifest.id)
         }
