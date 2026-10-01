@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+  <title>HiSH Editor</title>
+  <link rel="stylesheet" href="editor.css">
+</head>
+<body>
+  <main id="workspace" class="workspace empty">
+    <div class="toolbar">
+      <button id="undoButton" type="button" title="Undo (Ctrl+Z)">↶</button>
+      <button id="redoButton" type="button" title="Redo (Ctrl+Y)">↷</button>
+      <span class="separator"></span>
+      <button id="findButton" type="button" title="Find (Ctrl+F)">Find</button>
+      <button id="foldButton" type="button" title="Fold all">Fold</button>
+      <button id="unfoldButton" type="button" title="Unfold all">Unfold</button>
+      <span class="spacer"></span>
+      <span id="languageLabel" class="language">Plain Text</span>
+    </div>
+
+    <div id="findBar" class="find-bar hidden">
+      <input id="findInput" type="text" autocomplete="off" spellcheck="false" placeholder="Find">
+      <input id="replaceInput" type="text" autocomplete="off" spellcheck="false" placeholder="Replace">
+      <span id="findResult" class="find-result">0/0</span>
+      <button id="previousButton" type="button" title="Previous">↑</button>
+      <button id="nextButton" type="button" title="Next">↓</button>
+      <button id="replaceButton" type="button">Replace</button>
+      <button id="replaceAllButton" type="button">All</button>
+      <button id="closeFindButton" type="button" title="Close">×</button>
+    </div>
+
+    <div id="editorViewport" class="editor-viewport">
+      <div id="gutter" class="gutter"><div id="gutterContent"></div></div>
+      <div class="code-stack">
+        <pre id="highlight" aria-hidden="true"></pre>
+        <textarea id="editor" aria-label="Code editor" autocomplete="off" autocapitalize="off"
+          spellcheck="false" wrap="off"></textarea>
+        <div id="foldNotice" class="fold-notice hidden">Unfold code to edit</div>
+      </div>
+    </div>
+
+    <footer class="status-bar">
+      <span id="statusMessage">Ready</span>
+      <span class="spacer"></span>
+      <span id="cursorPosition">Ln 1, Col 1</span>
+      <span>Spaces: 2</span>
+      <span>UTF-8</span>
+    </footer>
+
+    <section id="emptyState" class="empty-state">
+      <div class="empty-icon">&lt;/&gt;</div>
+      <h1>HiSH Code Editor</h1>
+      <p>Open a Linux file from Explorer.</p>
+    </section>
+  </main>
+  <script src="editor.js"></script>
+</body>
+</html>
