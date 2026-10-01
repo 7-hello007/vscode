@@ -101,6 +101,7 @@ export class QemuAgent {
   private pendingResponse: string = ''
   private isConnected: boolean = false
   private commandMutex: Promise<void> = Promise.resolve()
+  private connectionGeneration: number = 0
 
   constructor(socketPath: string) {
     this.socketPath = socketPath
@@ -120,7 +121,9 @@ export class QemuAgent {
         return false
       }
 
-      this.client = socket.constructLocalSocketInstance()
+      const connectionClient = socket.constructLocalSocketInstance()
+      const connectionGeneration = ++this.connectionGeneration
+      this.client = connectionClient
       this.pendingResponse = ''  // 清理缓冲区
       this.requestId = 0  // 重置请求 ID
 
@@ -132,25 +135,42 @@ export class QemuAgent {
         timeout: 1000  // 恢复至 1000ms，配合 VmController 的 Smart Skip 逻辑确保稳定性
       }
 
-      await this.client.connect(connectOptions)
+      await connectionClient.connect(connectOptions)
+
+      if (this.client !== connectionClient || this.connectionGeneration !== connectionGeneration) {
+        try {
+          await connectionClient.close()
+        } catch (e) {
+        }
+        return false
+      }
 
       // 设置消息接收监听器
-      this.client.on('message', (value: socket.LocalSocketMessageInfo): void => {
+      connectionClient.on('message', (value: socket.LocalSocketMessageInfo): void => {
+        if (this.client !== connectionClient || this.connectionGeneration !== connectionGeneration) {
+          return
+        }
         const decoder: util.TextDecoder = util.TextDecoder.create('utf-8')
         const message: string = decoder.decodeToString(new Uint8Array(value.message))
         this.pendingResponse += message
       })
 
       // [修复] 监听错误事件
-      this.client.on('error', (err: Error): void => {
+      connectionClient.on('error', (err: Error): void => {
         hilog.error(DOMAIN, 'QemuAgent', 'Socket 错误: %{public}s', JSON.stringify(err))
-        this.isConnected = false
+        if (this.client === connectionClient && this.connectionGeneration === connectionGeneration) {
+          this.isConnected = false
+          this.connectionGeneration++
+        }
       })
 
       // [修复] 监听关闭事件
-      this.client.on('close', (): void => {
+      connectionClient.on('close', (): void => {
         hilog.info(DOMAIN, 'QemuAgent', 'Socket 连接已关闭')
-        this.isConnected = false
+        if (this.client === connectionClient && this.connectionGeneration === connectionGeneration) {
+          this.isConnected = false
+          this.connectionGeneration++
+        }
       })
 
       this.isConnected = true
@@ -180,6 +200,7 @@ export class QemuAgent {
    */
   async disconnect(): Promise<void> {
     const client: socket.LocalSocket | null = this.client
+    this.connectionGeneration++
     this.client = null // 立即置空，防止重入
     this.isConnected = false
     this.pendingResponse = ''
@@ -209,18 +230,22 @@ export class QemuAgent {
    * [修复1.3] 改进响应等待逻辑
    */
   private async sendCommand<T extends QGAResponseData>(command: string, args?: QGAArguments, waitForResponse: boolean = true, timeoutMs: number = 10000): Promise<T | null> {
-    if (!this.client || !this.isConnected) {
-      hilog.error(DOMAIN, 'QemuAgent', '发送命令失败：未连接到 QGA (命令: %{public}s)', command)
-      return null
-    }
-
-    const currentId = ++this.requestId
+    let commandClient: socket.LocalSocket | null = null
+    let commandGeneration: number = -1
 
     try {
       // [修复] 增加互斥锁，防止心跳探测与业务命令冲突导致响应错位
       const release = await this.lock();
 
       try {
+        if (!this.client || !this.isConnected) {
+          hilog.error(DOMAIN, 'QemuAgent', '发送命令失败：未连接到 QGA (命令: %{public}s)', command)
+          return null
+        }
+
+        commandClient = this.client
+        commandGeneration = this.connectionGeneration
+        const currentId = ++this.requestId
         const request: QGARequest = {
           execute: command,
           arguments: args,
@@ -239,7 +264,7 @@ export class QemuAgent {
         // 发送前清空缓冲区（确保读到的是这次请求的响应）
         this.pendingResponse = ''
 
-        await this.client.send(sendOptions)
+        await commandClient.send(sendOptions)
         hilog.info(DOMAIN, 'QemuAgent', '发送命令: %{public}s (id=%{public}d)', command, currentId)
 
         if (!waitForResponse) {
@@ -251,7 +276,8 @@ export class QemuAgent {
 
         while (Date.now() - startTime < timeoutMs) {
           // 检查连接状态
-          if (!this.isConnected) {
+          if (!this.isConnected || this.client !== commandClient ||
+            this.connectionGeneration !== commandGeneration) {
             hilog.error(DOMAIN, 'QemuAgent', '等待响应期间连接断开 (命令: %{public}s)', command)
             return null
           }
@@ -304,16 +330,20 @@ export class QemuAgent {
         // hilog.error(DOMAIN, 'QemuAgent', '等待响应超时 (命令: %{public}s, 已等待 %{public}d ms)，强制断开连接', command, Date.now() - startTime) // Original line
         hilog.error(DOMAIN, 'QemuAgent', '等待响应超时 (命令: %{public}s)，强制断开连接', command)
         // [修复] 超时意味着底层的 Socket 缓冲可能已乱序或虚拟机代理检测失效，必须彻底重连
-        this.isConnected = false
-        await this.disconnect()
+        if (this.client === commandClient && this.connectionGeneration === commandGeneration) {
+          this.isConnected = false
+          await this.disconnect()
+        }
         return null
       } finally {
         release();
       }
     } catch (e) {
       hilog.error(DOMAIN, 'QemuAgent', '执行命令异常: %{public}s (命令: %{public}s)', JSON.stringify(e), command)
-      this.isConnected = false  // 标记连接已断开
-      await this.disconnect() // [修复] 捕获异常时也断开连接
+      if (commandClient && this.client === commandClient && this.connectionGeneration === commandGeneration) {
+        this.isConnected = false  // 标记连接已断开
+        await this.disconnect() // [修复] 捕获异常时也断开连接
+      }
       return null
     }
   }
@@ -482,9 +512,18 @@ export class QemuAgent {
     const startTime = Date.now()
     while (Date.now() - startTime < timeoutMs) {
       await new Promise<void>((resolve: () => void) => setTimeout(resolve, 200))
+      if (!this.isAlive()) {
+        return null
+      }
       const status = await this.execStatus(pid)
 
-      if (status && status.exited) {
+      if (!status) {
+        // sendCommand returns null on disconnect, timeout, or a QGA error.
+        // None of those states can be repaired by polling the same stale PID.
+        return null
+      }
+
+      if (status.exited) {
         const outData = (status as Object as Record<string, Object>)['out-data'] as string
         if (outData) {
           // Base64 解码
@@ -503,7 +542,9 @@ export class QemuAgent {
 
     // 超时清理：尝试杀死该进程
     hilog.warn(DOMAIN, 'QemuAgent', '命令执行超时 (PID: %{public}d)，尝试清理...', pid)
-    await this.kill(pid)
+    if (this.isAlive()) {
+      await this.kill(pid)
+    }
 
     return null
   }
@@ -512,9 +553,14 @@ export class QemuAgent {
    * 杀死虚拟机内的进程
    */
   async kill(pid: number, signal: number = 15): Promise<boolean> {
-    const args: QGAArguments = { pid, signal }
-    const result = await this.sendCommand<Record<string, Object>>('guest-process-signal', args)
-    return result !== null
+    // The bundled guest agent does not implement the QGA process-signal extension.
+    // Reuse its supported guest-exec channel and let the Linux guest deliver
+    // the signal. This path is only invoked once after an exec timeout.
+    if (!this.isAlive()) {
+      return false
+    }
+    const killPid = await this.exec('/bin/sh', ['-c', 'kill -' + signal + ' ' + pid])
+    return killPid !== null
   }
 
   /**

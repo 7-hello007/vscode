@@ -7,6 +7,7 @@ import FileTreePanel from './components/FileTreePanel'
 import IDEMenuBar from './components/IDEMenuBar'
 import IDEPluginManagerPanel from './components/IDEPluginManagerPanel'
 import IDEStatusBar from './components/IDEStatusBar'
+import ProblemsPanel from './components/ProblemsPanel'
 import TerminalPanel from './components/TerminalPanel'
 import IDEFileSystem from './filesystem/IDEFileSystem'
 import { IDEFileSystemError } from './filesystem/IDEFileSystemTypes'
@@ -21,7 +22,21 @@ import {
 } from './model/IDEAIContracts'
 import { IDEPluginContext, IDEPluginState } from './plugin/IDEPluginContracts'
 import IDEPluginRegistry from './plugin/IDEPluginRegistry'
+import { IDEDiagnosticResult, IDEProblem } from './problems/IDEProblemContracts'
+import IDEProblemsService from './problems/IDEProblemsService'
 import IDETerminalRunner from './run/IDETerminalRunner'
+import IDESessionStore, { IDESessionState } from './session/IDESessionStore'
+import { terminalLifecycleBridge } from '../lib/TerminalLifecycleBridge'
+
+const IDE_TERMINAL_READY_SUBSCRIBER = 'IDE.Workbench.SessionRestore'
+const IDE_SESSION_MAX_PROBE_ATTEMPTS = 8
+const IDE_SESSION_INITIAL_PROBE_DELAY_MS = 5000
+const IDE_SESSION_MAX_PROBE_DELAY_MS = 60000
+
+enum IDEBottomPanelView {
+  PROBLEMS = 0,
+  TERMINAL = 1
+}
 
 class WorkbenchPluginContext implements IDEPluginContext {
   private activePathProvider: () => string
@@ -49,6 +64,8 @@ export default struct IDEWorkbench {
   private fileSystem: IDEFileSystem = new IDEFileSystem()
   private terminalRunner: IDETerminalRunner = new IDETerminalRunner()
   private aiService: IDEAIService = new IDEAIService(ideAIProviderRegistry)
+  private sessionStore: IDESessionStore = new IDESessionStore()
+  private problemsService: IDEProblemsService = new IDEProblemsService(this.fileSystem)
   private pluginRegistry: IDEPluginRegistry = new IDEPluginRegistry(
     new WorkbenchPluginContext((): string => this.activeFilePath))
   @State editorTabs: IDEEditorTab[] = []
@@ -78,7 +95,13 @@ export default struct IDEWorkbench {
   @State editorEncoding: string = 'UTF-8'
   @State editorLineEnding: string = 'LF'
   @State terminalOutput: string = ''
+  @State bottomPanelView: IDEBottomPanelView = IDEBottomPanelView.TERMINAL
+  @State problems: IDEProblem[] = []
+  @State problemsBusy: boolean = false
+  @State problemsStatus: string = ''
   @State fileTreeRootPath: string = '/'
+  @State fileTreeRootRevision: number = 0
+  @State fileSystemReady: boolean = false
   @State openFolderPath: string = '/'
   @State openFolderError: string = ''
   @State openFolderBusy: boolean = false
@@ -87,6 +110,18 @@ export default struct IDEWorkbench {
   private fileTreeResizeStartWidth: number = 202
   private aiPanelResizeStartWidth: number = 280
   private editorResizeStartWeight: number = 3
+  private sessionRestoreCancelled: boolean = false
+  private sessionRestoreInFlight: boolean = false
+  private sessionRestoring: boolean = false
+  private sessionRestored: boolean = false
+  private sessionProbeAttempt: number = 0
+  private sessionProbeTimer: number | undefined = undefined
+  private sessionSaveTimer: number | undefined = undefined
+  private sessionInteractionRevision: number = 0
+  private pendingFileActivations: string[] = []
+  private terminalReadyListener: () => void = (): void => this.onTerminalReady()
+  private problemsRequestSequence: number = 0
+  private sessionTimelineStartMs: number = 0
 
   private pluginController: CustomDialogController = new CustomDialogController({
     builder: CustomContentDialog({
@@ -124,6 +159,8 @@ export default struct IDEWorkbench {
   })
 
   aboutToAppear(): void {
+    this.sessionRestoreCancelled = false
+    terminalLifecycleBridge.subscribe(IDE_TERMINAL_READY_SUBSCRIBER, this.terminalReadyListener)
     if (this.compactLayout) {
       this.fileTreeWidth = 162
       this.aiPanelWidth = 220
@@ -139,19 +176,223 @@ export default struct IDEWorkbench {
     }
   }
 
-  private async openFile(path: string): Promise<void> {
-    if (this.findTab(path)) {
-      this.activeFilePath = path
-      this.editorStatus = ''
+  aboutToDisappear(): void {
+    this.problemsService.cancel()
+    this.sessionRestoreCancelled = true
+    terminalLifecycleBridge.unsubscribe(IDE_TERMINAL_READY_SUBSCRIBER)
+    if (this.sessionProbeTimer !== undefined) {
+      clearTimeout(this.sessionProbeTimer)
+      this.sessionProbeTimer = undefined
+    }
+    if (this.sessionSaveTimer !== undefined) {
+      clearTimeout(this.sessionSaveTimer)
+      this.sessionSaveTimer = undefined
+    }
+    if (this.sessionRestored && !this.sessionRestoring) {
+      void this.persistSession()
+    }
+  }
+
+  private onTerminalReady(): void {
+    if (this.sessionRestored || this.sessionRestoreInFlight || this.sessionRestoreCancelled) {
       return
     }
-    if (!path || this.isOpeningFile(path)) {
+    this.sessionTimelineStartMs = Date.now()
+    console.info('IDE session timeline: Terminal/ArkWeb ready at +0ms')
+    // ArkWeb/xterm readiness is not guest-agent readiness. It only starts a
+    // bounded, backoff-controlled probe schedule; elapsed time never marks the
+    // filesystem ready.
+    this.scheduleSessionProbe()
+  }
+
+  private async probeFileSystemAndRestore(): Promise<void> {
+    if (this.sessionRestored || this.sessionRestoreInFlight || this.sessionRestoreCancelled) {
       return
+    }
+    this.sessionRestoreInFlight = true
+    const probeStartedAt = Date.now()
+    console.info('IDE session timeline: filesystem probe started at +' + this.sessionElapsedMs() + 'ms')
+    try {
+      // A successful real guest directory listing is the readiness condition.
+      // Elapsed time alone is never treated as VM or file-system readiness.
+      await this.fileSystem.listDirectory('/')
+    } catch (error) {
+      console.info('IDE session timeline: filesystem probe failed after ' +
+        (Date.now() - probeStartedAt) + 'ms; next attempt uses configured backoff')
+      this.sessionRestoreInFlight = false
+      this.scheduleSessionProbe()
+      return
+    }
+    console.info('IDE session timeline: QGA + IDEFileSystem ready after probe ' +
+      (Date.now() - probeStartedAt) + 'ms, at +' + this.sessionElapsedMs() + 'ms')
+
+    try {
+      await this.restoreSession()
+    } catch (error) {
+      console.error('Unable to restore IDE session: ' + (error as Error).message)
+    } finally {
+      // A successful guest file-system probe consumes the one restore attempt.
+      // Session/Preferences failures must not keep retrying or block IDE startup.
+      this.fileSystemReady = true
+      this.sessionRestored = true
+      this.sessionRestoreInFlight = false
+    }
+  }
+
+  private scheduleSessionProbe(): void {
+    if (this.sessionRestoreCancelled || this.sessionRestored || this.sessionRestoreInFlight ||
+      this.sessionProbeTimer !== undefined) {
+      return
+    }
+    if (this.sessionProbeAttempt >= IDE_SESSION_MAX_PROBE_ATTEMPTS) {
+      console.error('IDE session restore stopped: guest filesystem did not become ready')
+      return
+    }
+    const delay = Math.min(IDE_SESSION_MAX_PROBE_DELAY_MS,
+      IDE_SESSION_INITIAL_PROBE_DELAY_MS * Math.pow(2, this.sessionProbeAttempt))
+    this.sessionProbeAttempt++
+    console.info('IDE session timeline: probe attempt ' + this.sessionProbeAttempt +
+      ' scheduled in ' + delay + 'ms')
+    this.sessionProbeTimer = setTimeout((): void => {
+      this.sessionProbeTimer = undefined
+      void this.probeFileSystemAndRestore()
+    }, delay)
+  }
+
+  private async restoreSession(): Promise<void> {
+    this.sessionRestoring = true
+    const interactionRevision = this.sessionInteractionRevision
+    const activeBeforeRestore = this.activeFilePath
+    const restoreStartedAt = Date.now()
+    try {
+      const loadStartedAt = Date.now()
+      const stored = await this.sessionStore.load(this.getUIContext())
+      console.info('IDE session timeline: Preferences loaded in ' + (Date.now() - loadStartedAt) +
+        'ms, at +' + this.sessionElapsedMs() + 'ms')
+      const session = stored || new IDESessionState()
+      let restoredRoot = '/'
+      if (session.rootPath !== '/') {
+        try {
+          const normalizedRoot = this.fileSystem.normalizePath(session.rootPath)
+          const rootValidationStartedAt = Date.now()
+          await this.fileSystem.listDirectory(normalizedRoot)
+          console.info('IDE session timeline: saved root validated in ' +
+            (Date.now() - rootValidationStartedAt) + 'ms')
+          restoredRoot = normalizedRoot
+        } catch (error) {
+          restoredRoot = '/'
+        }
+      }
+      console.info('IDE session timeline: root selected as ' + restoredRoot +
+        ' at +' + this.sessionElapsedMs() + 'ms')
+
+      // Do not overwrite UI state if the user already interacted while the guest
+      // was becoming ready. Historical tabs are merged below instead of clearing
+      // live tabs, which also prevents restore/manual-open races.
+      if (this.sessionInteractionRevision === 0) {
+        this.fileTreeVisible = session.fileTreeVisible
+        this.terminalVisible = session.terminalVisible
+        this.aiVisible = session.aiVisible
+        this.fileTreeWidth = session.fileTreeWidth
+        this.aiPanelWidth = session.aiPanelWidth
+        this.editorWeight = session.editorWeight
+        this.terminalWeight = session.terminalWeight
+        this.fileTreeRootPath = restoredRoot
+        this.fileTreeRootRevision++
+      }
+
+      for (const path of session.openFiles) {
+        if (this.sessionRestoreCancelled) {
+          return
+        }
+        const fileStartedAt = Date.now()
+        const opened = await this.openFile(path, true, false)
+        console.info('IDE session timeline: historical file ' + (opened ? 'restored' : 'skipped') +
+          ' in ' + (Date.now() - fileStartedAt) + 'ms: ' + path)
+      }
+      if (this.sessionInteractionRevision === interactionRevision && !activeBeforeRestore) {
+        if (session.activeFilePath && this.findTab(session.activeFilePath)) {
+          this.activeFilePath = session.activeFilePath
+        } else if (this.editorTabs.length > 0) {
+          this.activeFilePath = this.editorTabs[0].path
+        }
+      }
+      console.info('IDE session timeline: tabs restored=' + this.editorTabs.length +
+        ', active=' + (this.activeFilePath || '<none>') + ', restore duration=' +
+        (Date.now() - restoreStartedAt) + 'ms, at +' + this.sessionElapsedMs() + 'ms')
+      this.editorStatus = ''
+    } finally {
+      this.sessionRestoring = false
+      if (!this.sessionRestoreCancelled) {
+        this.scheduleSessionSave()
+      }
+    }
+  }
+
+  private sessionElapsedMs(): number {
+    return this.sessionTimelineStartMs > 0 ? Date.now() - this.sessionTimelineStartMs : 0
+  }
+
+  private scheduleSessionSave(): void {
+    if (this.sessionRestoring || this.sessionRestoreCancelled) {
+      return
+    }
+    if (this.sessionSaveTimer !== undefined) {
+      clearTimeout(this.sessionSaveTimer)
+    }
+    this.sessionSaveTimer = setTimeout((): void => {
+      this.sessionSaveTimer = undefined
+      void this.persistSession()
+    }, 250)
+  }
+
+  private async persistSession(): Promise<void> {
+    const session = new IDESessionState()
+    session.rootPath = this.fileTreeRootPath
+    const paths: string[] = []
+    for (const tab of this.editorTabs) {
+      if (tab.path && paths.indexOf(tab.path) === -1) {
+        paths.push(tab.path)
+      }
+    }
+    session.openFiles = paths
+    session.activeFilePath = this.activeFilePath
+    session.fileTreeVisible = this.fileTreeVisible
+    session.terminalVisible = this.terminalVisible
+    session.aiVisible = this.aiVisible
+    session.fileTreeWidth = this.fileTreeWidth
+    session.aiPanelWidth = this.aiPanelWidth
+    session.editorWeight = this.editorWeight
+    session.terminalWeight = this.terminalWeight
+    await this.sessionStore.save(this.getUIContext(), session)
+  }
+
+  private async openFile(path: string, silent: boolean = false, activate: boolean = true): Promise<boolean> {
+    if (!silent) {
+      this.sessionInteractionRevision++
+    }
+    if (this.findTab(path)) {
+      if (activate) {
+        this.activeFilePath = path
+      }
+      this.editorStatus = ''
+      this.scheduleSessionSave()
+      return true
+    }
+    if (!path) {
+      return false
+    }
+    if (this.isOpeningFile(path)) {
+      if (!silent && this.pendingFileActivations.indexOf(path) === -1) {
+        this.pendingFileActivations.push(path)
+      }
+      return false
     }
 
     this.openingFilePaths.push(path)
     this.editorBusy = true
     this.editorStatus = ''
+    let opened = false
     try {
       const content = await this.fileSystem.readFile(path)
       if (!this.findTab(path)) {
@@ -159,14 +400,22 @@ export default struct IDEWorkbench {
         newTabs.push(new IDEEditorTab(path, content))
         this.replaceEditorTabs(newTabs)
       }
-      this.activeFilePath = path
+      if (activate || this.pendingFileActivations.indexOf(path) !== -1) {
+        this.activeFilePath = path
+      }
+      opened = true
+      this.scheduleSessionSave()
     } catch (error) {
-      this.editorStatus = (error as Error).message
-      this.getUIContext().getPromptAction().showToast({ message: $r('app.string.ide_open_failed') })
+      this.editorStatus = silent ? '' : (error as Error).message
+      if (!silent) {
+        this.getUIContext().getPromptAction().showToast({ message: $r('app.string.ide_open_failed') })
+      }
     } finally {
       this.removeOpeningFile(path)
+      this.removePendingFileActivation(path)
       this.editorBusy = this.openingFilePaths.length > 0
     }
+    return opened
   }
 
   private isOpeningFile(path: string): boolean {
@@ -183,16 +432,25 @@ export default struct IDEWorkbench {
     }
   }
 
+  private removePendingFileActivation(path: string): void {
+    const index = this.pendingFileActivations.indexOf(path)
+    if (index !== -1) {
+      this.pendingFileActivations.splice(index, 1)
+    }
+  }
+
   private selectTab(path: string): void {
     if (!this.findTab(path) || path === this.activeFilePath) {
       return
     }
+    this.sessionInteractionRevision++
     const activeTab = this.findTab(this.activeFilePath)
     if (activeTab?.dirty) {
       void this.saveFile(activeTab.path, activeTab.content)
     }
     this.activeFilePath = path
     this.editorStatus = ''
+    this.scheduleSessionSave()
   }
 
   private requestCloseTab(path: string): void {
@@ -230,6 +488,7 @@ export default struct IDEWorkbench {
     if (oldIndex === -1) {
       return
     }
+    this.sessionInteractionRevision++
     const remaining: IDEEditorTab[] = []
     for (const tab of this.editorTabs) {
       if (tab.path !== path) {
@@ -246,6 +505,82 @@ export default struct IDEWorkbench {
       }
     }
     this.editorStatus = ''
+    this.scheduleSessionSave()
+  }
+
+  private closeSavedFiles(): void {
+    const savedPaths: string[] = []
+    for (const tab of this.editorTabs) {
+      if (!tab.dirty) {
+        savedPaths.push(tab.path)
+      }
+    }
+    for (const path of savedPaths) {
+      this.closeTab(path)
+    }
+  }
+
+  private requestCloseAllFiles(): void {
+    if (this.editorTabs.length === 0) {
+      return
+    }
+    let hasUnsavedFile: boolean = false
+    for (const tab of this.editorTabs) {
+      if (tab.dirty) {
+        hasUnsavedFile = true
+        break
+      }
+    }
+    if (!hasUnsavedFile) {
+      this.closeSavedFiles()
+      return
+    }
+    this.getUIContext().showAlertDialog({
+      title: $r('app.string.ide_close_all_unsaved_title'),
+      message: $r('app.string.ide_close_all_unsaved_message'),
+      autoCancel: true,
+      alignment: DialogAlignment.Center,
+      buttons: [
+        {
+          value: $r('app.string.setting_generic_cancel'),
+          action: () => {
+          }
+        },
+        {
+          enabled: true,
+          style: DialogButtonStyle.HIGHLIGHT,
+          value: $r('app.string.ide_save_and_close'),
+          action: () => {
+            void this.saveAndCloseAllFiles()
+          }
+        }
+      ]
+    })
+  }
+
+  private async saveAndCloseAllFiles(): Promise<void> {
+    if (this.editorBusy) {
+      return
+    }
+    const paths: string[] = []
+    for (const tab of this.editorTabs) {
+      paths.push(tab.path)
+    }
+    this.editorBusy = true
+    try {
+      for (const path of paths) {
+        const tab = this.findTab(path)
+        if (!tab) {
+          continue
+        }
+        if (!tab.dirty || await this.saveFile(tab.path, tab.content, false)) {
+          this.closeTab(path)
+        }
+      }
+    } finally {
+      this.editorBusy = false
+      this.scheduleSessionSave()
+    }
   }
 
   private updateEditorContent(path: string, content: string): void {
@@ -255,30 +590,53 @@ export default struct IDEWorkbench {
     }
     this.replaceEditorTabs(updated)
     this.editorStatus = ''
+    if (this.problems.length > 0) {
+      this.problemsStatus = 'File changed. Run diagnostics again to refresh Problems.'
+    }
   }
 
-  private async saveFile(path: string, content: string): Promise<void> {
+  private async saveFile(path: string, content: string, manageBusy: boolean = true): Promise<boolean> {
     const tab = this.findTab(path)
-    if (!tab || !tab.dirty || this.editorBusy) {
-      return
+    if (!tab) {
+      return false
+    }
+    if (!tab.dirty) {
+      return true
+    }
+    if (this.editorBusy && manageBusy) {
+      return false
     }
     this.updateEditorContent(path, content)
-    this.editorBusy = true
+    if (manageBusy) {
+      this.editorBusy = true
+    }
     this.editorStatus = ''
     try {
       await this.fileSystem.writeFile(path, content)
       const updated: IDEEditorTab[] = []
-      for (const tab of this.editorTabs) {
-        updated.push(tab.path === path ? new IDEEditorTab(tab.path, content, false) : tab)
+      let savedCurrentContent: boolean = false
+      for (const currentTab of this.editorTabs) {
+        if (currentTab.path === path && currentTab.content === content) {
+          updated.push(new IDEEditorTab(currentTab.path, currentTab.content, false))
+          savedCurrentContent = true
+        } else {
+          updated.push(currentTab)
+        }
       }
       this.replaceEditorTabs(updated)
-      this.editorStatus = this.getUIContext().getHostContext()?.resourceManager
-        .getStringByNameSync('ide_saved') || 'Saved'
+      if (savedCurrentContent) {
+        this.editorStatus = this.getUIContext().getHostContext()?.resourceManager
+          .getStringByNameSync('ide_saved') || 'Saved'
+      }
+      return savedCurrentContent
     } catch (error) {
       this.editorStatus = (error as Error).message
       this.getUIContext().getPromptAction().showToast({ message: $r('app.string.ide_save_failed') })
+      return false
     } finally {
-      this.editorBusy = false
+      if (manageBusy) {
+        this.editorBusy = false
+      }
     }
   }
 
@@ -307,6 +665,7 @@ export default struct IDEWorkbench {
         this.replaceEditorTabs(updated)
       }
       this.terminalRunner.send(command)
+      this.bottomPanelView = IDEBottomPanelView.TERMINAL
       const prefix = this.getUIContext().getHostContext()?.resourceManager
         .getStringByNameSync('ide_running_file') || 'Running'
       this.editorStatus = prefix + ': ' + tab.name
@@ -330,9 +689,114 @@ export default struct IDEWorkbench {
     this.editorCommandRequest = command + ':' + this.editorCommandSequence
   }
 
+  private applyDiagnosticResult(result: IDEDiagnosticResult): void {
+    this.problems = result.problems
+    if (result.failureMessage) {
+      this.problemsStatus = '检查失败：' + result.failureMessage
+      return
+    }
+    if (result.unavailableMessage) {
+      this.problemsStatus = result.unavailableMessage
+      return
+    }
+    const boundary = result.truncated ? ' (limit reached)' : ''
+    const skipped = result.skippedDirectories > 0 ? ', skipped directories ' + result.skippedDirectories : ''
+    const failed = result.failedFiles > 0 ? ', failed files ' + result.failedFiles : ''
+    this.problemsStatus = 'Checked ' + result.checkedFiles + ' file(s), ' + result.problems.length +
+      ' problem(s)' + skipped + failed + boundary + '. Tools: ' + result.toolSummary
+  }
+
+  private async checkCurrentFileProblems(): Promise<void> {
+    const tab = this.findTab(this.activeFilePath)
+    this.terminalVisible = true
+    this.bottomPanelView = IDEBottomPanelView.PROBLEMS
+    if (!tab) {
+      this.problems = []
+      this.problemsStatus = 'No active editor file.'
+      return
+    }
+    const request = ++this.problemsRequestSequence
+    this.problemsService.cancel()
+    this.problemsBusy = true
+    this.problemsStatus = 'Checking ' + tab.path + '…'
+    if (tab.dirty) {
+      const saved = await this.saveFile(tab.path, tab.content)
+      if (request !== this.problemsRequestSequence) return
+      if (!saved) {
+        this.problemsBusy = false
+        this.problemsStatus = 'Unable to save the current file; diagnostics were not started.'
+        return
+      }
+    }
+    const result = await this.problemsService.diagnoseFile(tab.path)
+    if (request !== this.problemsRequestSequence) return
+    this.problemsBusy = false
+    if (result.cancelled) {
+      this.problemsStatus = 'Diagnostics cancelled.'
+      return
+    }
+    this.applyDiagnosticResult(result)
+  }
+
+  private async checkProjectProblems(): Promise<void> {
+    const request = ++this.problemsRequestSequence
+    this.problemsService.cancel()
+    this.terminalVisible = true
+    this.bottomPanelView = IDEBottomPanelView.PROBLEMS
+    this.problemsBusy = true
+    this.problemsStatus = 'Checking ' + this.fileTreeRootPath + '…'
+    const result = await this.problemsService.diagnoseProject(this.fileTreeRootPath)
+    if (request !== this.problemsRequestSequence) return
+    this.problemsBusy = false
+    if (result.cancelled) {
+      this.problemsStatus = 'Diagnostics cancelled.'
+      return
+    }
+    this.applyDiagnosticResult(result)
+  }
+
+  private cancelProblems(): void {
+    this.problemsRequestSequence++
+    this.problemsService.cancel()
+    this.problemsBusy = false
+    this.problemsStatus = 'Diagnostics cancelled.'
+  }
+
+  private clearProblems(): void {
+    this.cancelProblems()
+    this.problems = []
+    this.problemsStatus = ''
+  }
+
+  private async openProblem(problem: IDEProblem): Promise<void> {
+    const opened = await this.openFile(problem.filePath)
+    if (!opened) return
+    this.bottomPanelView = IDEBottomPanelView.PROBLEMS
+    this.issueEditorCommand('goTo,' + problem.line + ',' + problem.column)
+  }
+
   private resizeEditor(delta: number): void {
     this.editorWeight = Math.max(1, Math.min(5, this.editorWeight + delta))
     this.terminalWeight = Math.max(1, Math.min(5, this.terminalWeight - delta))
+    this.scheduleSessionSave()
+  }
+
+  private toggleFileTree(): void {
+    this.sessionInteractionRevision++
+    this.fileTreeVisible = !this.fileTreeVisible
+    this.scheduleSessionSave()
+  }
+
+  private toggleTerminal(): void {
+    this.sessionInteractionRevision++
+    this.terminalVisible = !this.terminalVisible
+    this.scheduleSessionSave()
+  }
+
+  private toggleAI(): void {
+    this.sessionInteractionRevision++
+    this.aiVisible = !this.aiVisible
+    this.scheduleSessionSave()
   }
 
   private resetPanelLayout(): void {
@@ -344,23 +808,27 @@ export default struct IDEWorkbench {
     this.terminalWeight = 2
     this.fileTreeWidth = this.compactLayout ? 162 : 202
     this.aiPanelWidth = this.compactLayout ? 220 : 280
+    this.scheduleSessionSave()
   }
 
   private resizeFileTree(offset: number): void {
     const minimum = this.compactLayout ? 140 : 160
     const maximum = this.compactLayout ? 262 : 322
     this.fileTreeWidth = Math.max(minimum, Math.min(maximum, this.fileTreeResizeStartWidth + offset))
+    this.scheduleSessionSave()
   }
 
   private resizeAIPanel(offset: number): void {
     const minimum = this.compactLayout ? 180 : 220
     const maximum = this.compactLayout ? 320 : 360
     this.aiPanelWidth = Math.max(minimum, Math.min(maximum, this.aiPanelResizeStartWidth - offset))
+    this.scheduleSessionSave()
   }
 
   private resizeEditorTerminal(offset: number): void {
     this.editorWeight = Math.max(1, Math.min(4, this.editorResizeStartWeight + offset / 48))
     this.terminalWeight = 5 - this.editorWeight
+    this.scheduleSessionSave()
   }
 
   private openFolderDialog(): void {
@@ -379,8 +847,11 @@ export default struct IDEWorkbench {
     try {
       const normalized = this.fileSystem.normalizePath(this.openFolderPath.trim())
       await this.fileSystem.listDirectory(normalized)
+      this.sessionInteractionRevision++
       this.fileTreeRootPath = normalized
+      this.fileTreeRootRevision++
       this.fileTreeVisible = true
+      this.scheduleSessionSave()
       this.openFolderController.close()
     } catch (error) {
       if (error instanceof IDEFileSystemError && error.status === 20) {
@@ -571,6 +1042,7 @@ export default struct IDEWorkbench {
     if (activeWasDeleted) {
       this.activeFilePath = remaining.length > 0 ? remaining[0].path : ''
     }
+    this.scheduleSessionSave()
   }
 
   private entryRenamed(oldPath: string, newPath: string): void {
@@ -590,6 +1062,7 @@ export default struct IDEWorkbench {
     } else if (this.activeFilePath.startsWith(oldPath + '/')) {
       this.activeFilePath = newPath + this.activeFilePath.substring(oldPath.length)
     }
+    this.scheduleSessionSave()
   }
 
   private findTab(path: string): IDEEditorTab | null {
@@ -665,12 +1138,14 @@ export default struct IDEWorkbench {
             terminalExtraKeysVisible: this.terminalExtraKeysVisible,
             onSave: (): void => this.saveActiveFile(),
             onOpenFolder: (): void => this.openFolderDialog(),
+            onCloseSavedFiles: (): void => this.closeSavedFiles(),
+            onCloseAllFiles: (): void => this.requestCloseAllFiles(),
             onPlugins: (): void => this.pluginController.open(),
             onEditorCommand: (command: string): void => this.issueEditorCommand(command),
             onRun: (): void => { void this.runActiveFile() },
-            onToggleFileTree: (): void => { this.fileTreeVisible = !this.fileTreeVisible },
-            onToggleTerminal: (): void => { this.terminalVisible = !this.terminalVisible },
-            onToggleAI: (): void => { this.aiVisible = !this.aiVisible },
+            onToggleFileTree: (): void => this.toggleFileTree(),
+            onToggleTerminal: (): void => this.toggleTerminal(),
+            onToggleAI: (): void => this.toggleAI(),
             onToggleTerminalExtraKeys: (): void => {
               this.terminalExtraKeysVisible = !this.terminalExtraKeysVisible
             },
@@ -689,14 +1164,14 @@ export default struct IDEWorkbench {
             this.panelToggleButton($r('sys.symbol.folder'), this.fileTreeVisible,
               this.fileTreeVisible ? $r('app.string.ide_menu_hide_explorer') :
                 $r('app.string.ide_menu_show_explorer'),
-              (): void => { this.fileTreeVisible = !this.fileTreeVisible })
+              (): void => this.toggleFileTree())
             this.panelToggleButton($r('sys.symbol.code'), this.terminalVisible,
               this.terminalVisible ? $r('app.string.ide_menu_hide_terminal') :
                 $r('app.string.ide_menu_show_terminal'),
-              (): void => { this.terminalVisible = !this.terminalVisible })
+              (): void => this.toggleTerminal())
             this.panelToggleButton($r('sys.symbol.wand_and_stars'), this.aiVisible,
               this.aiVisible ? $r('app.string.ide_menu_hide_ai') : $r('app.string.ide_menu_show_ai'),
-              (): void => { this.aiVisible = !this.aiVisible })
+              (): void => this.toggleAI())
             this.pluginButton()
           }
           .margin({ top: 8 })
@@ -709,6 +1184,8 @@ export default struct IDEWorkbench {
           FileTreePanel({
             fileSystem: this.fileSystem,
             rootPath: this.fileTreeRootPath,
+            rootRevision: this.fileTreeRootRevision,
+            readyToLoad: this.fileSystemReady,
             onOpenFile: (path: string) => this.openFile(path),
             onEntryDeleted: (path: string) => this.entryDeleted(path),
             onEntryRenamed: (oldPath: string, newPath: string) => this.entryRenamed(oldPath, newPath)
@@ -756,14 +1233,95 @@ export default struct IDEWorkbench {
                   .onActionUpdate((event: GestureEvent) => this.resizeEditorTerminal(event.offsetY))
               )
 
-            TerminalPanel({
-              virtKeyEnabled: this.terminalVirtualKeys,
-              extraKeysVisible: this.terminalExtraKeysVisible,
-              canRun: this.activeFilePath.length > 0 && !this.editorBusy,
-              running: this.runBusy,
-              onRun: () => this.runActiveFile(),
-              onOutput: (output: string) => this.appendTerminalOutput(output)
-            })
+            Column() {
+              Row() {
+                Column() {
+                  Text((this.getUIContext().getHostContext()?.resourceManager
+                    .getStringByNameSync('ide_problems_title') || 'Problems') + ' ' + this.problems.length)
+                    .height(30)
+                    .width('100%')
+                    .fontSize(11)
+                    .fontColor(this.bottomPanelView === IDEBottomPanelView.PROBLEMS ? '#E0E4EA' : '#87909D')
+                    .textAlign(TextAlign.Center)
+                    .maxLines(1)
+                  if (this.bottomPanelView === IDEBottomPanelView.PROBLEMS) {
+                    Row()
+                      .width(52)
+                      .height(1)
+                      .backgroundColor('#767B84')
+                      .borderRadius(0)
+                  }
+                }
+                  .width(72)
+                  .height(31)
+                  .alignItems(HorizontalAlign.Center)
+                  .margin({ right: 4 })
+                  .onClick(() => this.bottomPanelView = IDEBottomPanelView.PROBLEMS)
+
+                Column() {
+                  Text($r('app.string.ide_terminal_title'))
+                    .height(30)
+                    .width('100%')
+                    .fontSize(11)
+                    .fontColor(this.bottomPanelView === IDEBottomPanelView.TERMINAL ? '#E0E4EA' : '#87909D')
+                    .textAlign(TextAlign.Center)
+                    .maxLines(1)
+                  if (this.bottomPanelView === IDEBottomPanelView.TERMINAL) {
+                    Row()
+                      .width(40)
+                      .height(1)
+                      .backgroundColor('#767B84')
+                      .borderRadius(0)
+                  }
+                }
+                  .width(56)
+                  .height(31)
+                  .alignItems(HorizontalAlign.Center)
+                  .onClick(() => this.bottomPanelView = IDEBottomPanelView.TERMINAL)
+                Blank()
+                if (this.bottomPanelView === IDEBottomPanelView.TERMINAL) {
+                  Button(this.runBusy ? $r('app.string.ide_running') : $r('app.string.ide_run'))
+                    .fontSize(10)
+                    .height(25)
+                    .enabled(this.activeFilePath.length > 0 && !this.editorBusy && !this.runBusy)
+                    .margin({ right: 10 })
+                    .onClick(() => { void this.runActiveFile() })
+                }
+              }
+              .width('100%')
+              .height(32)
+              .padding({ left: 6, right: 6 })
+              .backgroundColor('#181B20')
+
+              Stack() {
+                TerminalPanel({
+                  headerVisible: false,
+                  virtKeyEnabled: this.terminalVirtualKeys,
+                  extraKeysVisible: this.terminalExtraKeysVisible,
+                  canRun: this.activeFilePath.length > 0 && !this.editorBusy,
+                  running: this.runBusy,
+                  onRun: () => this.runActiveFile(),
+                  onOutput: (output: string) => this.appendTerminalOutput(output)
+                })
+                  .visibility(this.bottomPanelView === IDEBottomPanelView.TERMINAL ?
+                    Visibility.Visible : Visibility.Hidden)
+
+                ProblemsPanel({
+                  problems: this.problems,
+                  busy: this.problemsBusy,
+                  status: this.problemsStatus,
+                  onCheckCurrent: (): void => { void this.checkCurrentFileProblems() },
+                  onCheckProject: (): void => { void this.checkProjectProblems() },
+                  onCancel: (): void => this.cancelProblems(),
+                  onClear: (): void => this.clearProblems(),
+                  onOpenProblem: (problem: IDEProblem): void => { void this.openProblem(problem) }
+                })
+                  .visibility(this.bottomPanelView === IDEBottomPanelView.PROBLEMS ?
+                    Visibility.Visible : Visibility.Hidden)
+              }
+              .width('100%')
+              .layoutWeight(1)
+            }
               .layoutWeight(this.terminalWeight)
               .margin({ left: 6 })
           }

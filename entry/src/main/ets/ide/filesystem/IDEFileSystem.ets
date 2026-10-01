@@ -30,19 +30,20 @@ export default class IDEFileSystem {
     const script =
       'ide_dir=' + quotedDirectory + '\n' +
       '[ -d "$ide_dir" ] || exit 20\n' +
+      '[ -r "$ide_dir" ] && [ -x "$ide_dir" ] || exit 13\n' +
       'for ide_item in "$ide_dir"/.[!.]* "$ide_dir"/..?* "$ide_dir"/*; do\n' +
       '  if [ ! -e "$ide_item" ] && [ ! -L "$ide_item" ]; then continue; fi\n' +
       '  ide_name=${ide_item##*/}\n' +
       '  ide_name_hex=$(printf \'%s\' "$ide_name" | od -An -tx1 | tr -d \' \\n\')\n' +
       '  if [ -L "$ide_item" ]; then\n' +
-      '    ide_type=l\n' +
+      '    if [ -d "$ide_item" ]; then ide_type=d; else ide_type=l; fi\n' +
       '    ide_size=0\n' +
       '  elif [ -d "$ide_item" ]; then\n' +
       '    ide_type=d\n' +
       '    ide_size=0\n' +
       '  elif [ -f "$ide_item" ]; then\n' +
       '    ide_type=f\n' +
-      '    ide_size=$(wc -c < "$ide_item" 2>/dev/null || printf \'0\')\n' +
+      '    ide_size=$(stat -c %s "$ide_item" 2>/dev/null || printf \'0\')\n' +
       '  else\n' +
       '    ide_type=o\n' +
       '    ide_size=0\n' +

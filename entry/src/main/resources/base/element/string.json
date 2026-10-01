@@ -1849,6 +1849,50 @@
       "value": "Save  Ctrl+S"
     },
     {
+      "name": "ide_problems_title",
+      "value": "Problems"
+    },
+    {
+      "name": "ide_problems_check_current",
+      "value": "Check Current File"
+    },
+    {
+      "name": "ide_problems_check_project",
+      "value": "Check Project"
+    },
+    {
+      "name": "ide_problems_cancel",
+      "value": "Cancel"
+    },
+    {
+      "name": "ide_problems_clear",
+      "value": "Clear"
+    },
+    {
+      "name": "ide_problems_empty",
+      "value": "No problems to display"
+    },
+    {
+      "name": "ide_menu_close_saved_files",
+      "value": "Close Saved Files"
+    },
+    {
+      "name": "ide_menu_close_all_files",
+      "value": "Close All Files"
+    },
+    {
+      "name": "ide_close_all_unsaved_title",
+      "value": "Unsaved Files"
+    },
+    {
+      "name": "ide_close_all_unsaved_message",
+      "value": "Save all unsaved files before closing? Files that fail to save will remain open."
+    },
+    {
+      "name": "ide_save_and_close",
+      "value": "Save and Close"
+    },
+    {
       "name": "ide_menu_plugins",
       "value": "Plugins"
     },

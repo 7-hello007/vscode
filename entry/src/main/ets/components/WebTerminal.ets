@@ -15,6 +15,7 @@ import {
   NormalKeySequences
 } from '../lib/terminalVirtualKeys';
 import { terminalOutputBridge } from '../lib/TerminalOutputBridge';
+import { terminalLifecycleBridge } from '../lib/TerminalLifecycleBridge';
 
 const DOMAIN = 0x0000;
 
@@ -386,6 +387,7 @@ export default struct WebTerminal {
     napi.onShutdown((): void => {
       void this.onShutdown()
     })
+    terminalLifecycleBridge.markReady()
     const vmStatus = AppStorage.get(appOption.currentEmulatorStatus) as string | undefined
     if (vmStatus === 'ABNORMAL') {
       const message = this.getUIContext().getHostContext()?.resourceManager.getStringByNameSync('pm_status_qmp_connect_failed')

@@ -17,6 +17,8 @@ export default struct IDEMenuBar {
   @Prop terminalExtraKeysVisible: boolean = false
   @Require onSave: () => void
   @Require onOpenFolder: () => void
+  @Require onCloseSavedFiles: () => void
+  @Require onCloseAllFiles: () => void
   @Require onPlugins: () => void
   @Require onEditorCommand: (command: string) => void
   @Require onRun: () => void
@@ -60,7 +62,7 @@ export default struct IDEMenuBar {
   }
 
   private actionCount(): number {
-    if (this.activeSection === IDEMainMenuSection.FILE) return 3
+    if (this.activeSection === IDEMainMenuSection.FILE) return 5
     if (this.activeSection === IDEMainMenuSection.EDIT) return 4
     if (this.activeSection === IDEMainMenuSection.SELECTION) return 1
     if (this.activeSection === IDEMainMenuSection.VIEW) return 6
@@ -115,6 +117,8 @@ export default struct IDEMenuBar {
       if (this.activeSection === IDEMainMenuSection.FILE) {
         this.actionButton($r('app.string.ide_menu_save'), () => this.onSave())
         this.actionButton($r('app.string.ide_menu_open_folder'), () => this.onOpenFolder())
+        this.actionButton($r('app.string.ide_menu_close_saved_files'), () => this.onCloseSavedFiles())
+        this.actionButton($r('app.string.ide_menu_close_all_files'), () => this.onCloseAllFiles())
         this.actionButton($r('app.string.ide_menu_plugins'), () => this.onPlugins())
       } else if (this.activeSection === IDEMainMenuSection.EDIT) {
         this.actionButton($r('app.string.ide_menu_undo'), () => this.onEditorCommand('undo'))

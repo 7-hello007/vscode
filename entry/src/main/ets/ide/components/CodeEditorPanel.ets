@@ -47,7 +47,7 @@ export default struct CodeEditorPanel {
     if (!this.webReady || !this.commandRequest) {
       return
     }
-    const separator = this.commandRequest.indexOf(':')
+    const separator = this.commandRequest.lastIndexOf(':')
     const command = separator === -1 ? this.commandRequest : this.commandRequest.substring(0, separator)
     if (command === 'undo') {
       this.runEditorScript('window.hishEditor && window.hishEditor.undo()')
@@ -65,6 +65,11 @@ export default struct CodeEditorPanel {
       this.runEditorScript('window.hishEditor && window.hishEditor.goStart()')
     } else if (command === 'goEnd') {
       this.runEditorScript('window.hishEditor && window.hishEditor.goEnd()')
+    } else if (command.startsWith('goTo,')) {
+      const parts = command.split(',')
+      const line = parts.length > 1 ? Math.max(1, parseInt(parts[1]) || 1) : 1
+      const column = parts.length > 2 ? Math.max(1, parseInt(parts[2]) || 1) : 1
+      this.runEditorScript('window.hishEditor && window.hishEditor.goTo(' + line + ',' + column + ')')
     }
   }
 

@@ -14,6 +14,7 @@ class FileNode {
   expanded: boolean = false
   loaded: boolean = false
   loading: boolean = false
+  errorMessage: string = ''
   children: FileNode[] = []
 
   constructor(entry: IDEFileEntry, depth: number) {
@@ -26,6 +27,8 @@ class FileNode {
 export default struct FileTreePanel {
   @Require fileSystem: IDEFileSystem
   @Watch('onRootPathChanged') @Prop rootPath: string = '/'
+  @Watch('onRootRevisionChanged') @Prop rootRevision: number = 0
+  @Watch('onReadyToLoadChanged') @Prop readyToLoad: boolean = false
   @Require onOpenFile: (path: string) => void
   @Require onEntryDeleted: (path: string) => void
   @Require onEntryRenamed: (oldPath: string, newPath: string) => void
@@ -46,14 +49,33 @@ export default struct FileTreePanel {
   }, 0)
 
   aboutToAppear(): void {
-    void this.initialize()
+    if (this.readyToLoad) {
+      void this.initialize()
+    } else {
+      this.loading = false
+    }
   }
 
   private onRootPathChanged(): void {
-    void this.initialize()
+    if (this.readyToLoad) {
+      void this.initialize()
+    }
+  }
+
+  private onRootRevisionChanged(): void {
+    if (this.readyToLoad) {
+      void this.initialize()
+    }
+  }
+
+  private onReadyToLoadChanged(): void {
+    if (this.readyToLoad) {
+      void this.initialize()
+    }
   }
 
   private async initialize(): Promise<void> {
+    const loadStartedAt = Date.now()
     const normalizedRoot = this.fileSystem.normalizePath(this.rootPath)
     this.rootNode = new FileNode({
       name: this.fileSystem.baseName(normalizedRoot),
@@ -73,6 +95,8 @@ export default struct FileTreePanel {
       this.errorMessage = (error as Error).message
     } finally {
       this.loading = false
+      console.info('IDE session timeline: File Tree root load completed in ' +
+        (Date.now() - loadStartedAt) + 'ms for ' + normalizedRoot)
     }
   }
 
@@ -134,11 +158,15 @@ export default struct FileTreePanel {
       return
     }
     node.loading = true
+    node.errorMessage = ''
     this.rebuildVisibleNodes()
     try {
       const entries = await this.fileSystem.listDirectory(node.entry.path)
       node.children = this.mergeChildren(node, entries)
       node.loaded = true
+    } catch (error) {
+      node.errorMessage = node.entry.path + ': ' + (error as Error).message
+      throw new Error(node.errorMessage)
     } finally {
       node.loading = false
       this.rebuildVisibleNodes()
@@ -149,10 +177,19 @@ export default struct FileTreePanel {
     if (!node.loaded || node.entry.type !== IDEFileType.DIRECTORY) {
       return
     }
-    await this.loadChildren(node, true)
+    try {
+      await this.loadChildren(node, true)
+    } catch (error) {
+      return
+    }
     for (const child of node.children) {
       if (child.loaded) {
-        await this.refreshLoadedNode(child)
+        try {
+          await this.refreshLoadedNode(child)
+        } catch (error) {
+          // A failed child refresh remains attached to that node and must not
+          // prevent independent sibling directories from refreshing.
+        }
       }
     }
   }
@@ -218,6 +255,9 @@ export default struct FileTreePanel {
   }
 
   private async activateNode(node: FileNode): Promise<void> {
+    if (node.loading) {
+      return
+    }
     if (node.entry.type === IDEFileType.DIRECTORY) {
       this.currentDirectory = node.entry.path
       this.pathInput = node.entry.path
@@ -233,7 +273,9 @@ export default struct FileTreePanel {
         node.expanded = true
         this.rebuildVisibleNodes()
       } catch (error) {
-        this.errorMessage = (error as Error).message
+        // loadChildren stores the error on this node. Other branches remain
+        // usable and can continue loading or expanding independently.
+        this.rebuildVisibleNodes()
       }
       return
     }
@@ -513,12 +555,14 @@ export default struct FileTreePanel {
                       .width(13)
                       .height(13)
                       .color('#8F98A6')
-                  } else {
+                  } else if (!node.loaded || node.children.length > 0) {
                     Text(node.expanded ? '⌄' : '›')
                       .width(13)
                       .fontSize(15)
                       .fontColor('#8F98A6')
                       .textAlign(TextAlign.Center)
+                  } else {
+                    Blank().width(13)
                   }
                 } else {
                   Blank().width(13)
@@ -536,9 +580,11 @@ export default struct FileTreePanel {
                     .fontColor('#D7DAE0')
                     .maxLines(1)
                     .textOverflow({ overflow: TextOverflow.Ellipsis })
-                  Text(this.fileTypeLabel(node.entry))
+                  Text(node.errorMessage ? node.errorMessage : this.fileTypeLabel(node.entry))
                     .fontSize(9)
-                    .fontColor('#747E8C')
+                    .fontColor(node.errorMessage ? '#E5A5A5' : '#747E8C')
+                    .maxLines(1)
+                    .textOverflow({ overflow: TextOverflow.Ellipsis })
                 }
                 .layoutWeight(1)
                 .alignItems(HorizontalAlign.Start)

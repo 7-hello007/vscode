@@ -383,7 +383,7 @@
   function openFind(showReplace) {
     unfoldAll(false);
     findBar.classList.remove('hidden');
-    workspace.classList.remove('find-closed');
+    workspace.classList.add('find-open');
     replaceInput.style.display = showReplace ? '' : 'none';
     document.getElementById('replaceButton').style.display = showReplace ? '' : 'none';
     document.getElementById('replaceAllButton').style.display = showReplace ? '' : 'none';
@@ -396,6 +396,7 @@
 
   function closeFind() {
     findBar.classList.add('hidden');
+    workspace.classList.remove('find-open');
     editor.focus();
   }
 
@@ -539,6 +540,20 @@
     goEnd: function () {
       editor.focus();
       editor.setSelectionRange(editor.value.length, editor.value.length);
+      updateCursor();
+    },
+    goTo: function (requestedLine, requestedColumn) {
+      unfoldAll(false);
+      const lines = fullContent.split('\n');
+      const line = Math.max(1, Math.min(lines.length, Number(requestedLine) || 1));
+      const column = Math.max(1, Number(requestedColumn) || 1);
+      let offset = 0;
+      for (let index = 0; index < line - 1; index++) offset += lines[index].length + 1;
+      offset += Math.min(lines[line - 1].length, column - 1);
+      editor.focus();
+      editor.setSelectionRange(offset, offset);
+      render(false);
+      ensureCursorVisible();
       updateCursor();
     }
   };

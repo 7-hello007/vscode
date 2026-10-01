@@ -5,6 +5,7 @@ const IDE_TERMINAL_OUTPUT_SUBSCRIBER = 'IDE.TerminalPanel.AIContext'
 
 @Component
 export default struct TerminalPanel {
+  @Prop headerVisible: boolean = true
   @Require virtKeyEnabled: boolean
   @Prop extraKeysVisible: boolean = false
   @Require onRun: () => void
@@ -45,27 +46,29 @@ export default struct TerminalPanel {
 
   build() {
     Column() {
-      Row() {
-        Text($r('app.string.ide_terminal_title'))
-          .fontSize(12)
-          .fontWeight(FontWeight.Medium)
-          .fontColor('#D7DAE0')
-          .letterSpacing(0.6)
-        Blank()
-        Button(this.running ? $r('app.string.ide_running') : $r('app.string.ide_run'))
-          .fontSize(10)
-          .height(25)
-          .enabled(this.canRun && !this.running)
-          .margin({ right: 10 })
-          .onClick(() => this.onRun())
-        Text($r('app.string.ide_terminal_runtime'))
-          .fontSize(11)
-          .fontColor('#7E8794')
+      if (this.headerVisible) {
+        Row() {
+          Text($r('app.string.ide_terminal_title'))
+            .fontSize(12)
+            .fontWeight(FontWeight.Medium)
+            .fontColor('#D7DAE0')
+            .letterSpacing(0.6)
+          Blank()
+          Button(this.running ? $r('app.string.ide_running') : $r('app.string.ide_run'))
+            .fontSize(10)
+            .height(25)
+            .enabled(this.canRun && !this.running)
+            .margin({ right: 10 })
+            .onClick(() => this.onRun())
+          Text($r('app.string.ide_terminal_runtime'))
+            .fontSize(11)
+            .fontColor('#7E8794')
+        }
+        .width('100%')
+        .height(32)
+        .padding({ left: 12, right: 12 })
+        .backgroundColor('#181B20')
       }
-      .width('100%')
-      .height(32)
-      .padding({ left: 12, right: 12 })
-      .backgroundColor('#181B20')
 
       WebTerminal({
         virtKeyEnabled: this.virtKeyEnabled || this.extraKeysVisible,

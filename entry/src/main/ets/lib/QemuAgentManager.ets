@@ -41,6 +41,8 @@ class QemuAgentManagerImpl {
 
   private agent: QemuAgent | null = null
   private currentUser: string | null = null
+  private currentUserLeaseCount: number = 0
+  private connectionPromise: Promise<QemuAgent | null> | null = null
   private waitQueue: ConnectionRequest[] = []
   private isProcessing: boolean = false
   private keepAliveTimer: number = -1
@@ -65,27 +67,33 @@ class QemuAgentManagerImpl {
 
     // 如果当前没有使用者，直接获取
     if (!this.currentUser) {
-      return await this.createConnection(userId)
+      return await this.claimAndCreateConnection(userId)
     }
 
     // 如果是同一个使用者，直接返回现有连接
+    if (this.currentUser === userId && this.connectionPromise) {
+      // The owner is still establishing and synchronizing the socket. Await
+      // that exact attempt instead of handing out an Agent whose local socket
+      // is connected but whose guest-sync-delimited handshake is unfinished.
+      const connectingAgent = await this.connectionPromise
+      if (connectingAgent && this.currentUser === userId && connectingAgent.isAlive()) {
+        this.currentUserLeaseCount++
+        return connectingAgent
+      }
+      return null
+    }
     if (this.currentUser === userId && this.agent) {
       // [修复] 即使是同一用户，也要检查 Agent 是否真的存活（防止 Socket 已断开但逻辑状态未更新）
       if (this.agent.isAlive()) {
+        this.currentUserLeaseCount++
         hilog.info(DOMAIN, 'AgentManager', '用户 %{public}s 复用现有活跃 Agent', userId);
         return this.agent;
       }
       hilog.warn(DOMAIN, 'AgentManager', '用户 %{public}s 的 Agent 已失效，准备释放并重新创建', userId);
       await this.forceRelease();
-      // [修复] 释放后管理器变为空忙，直接重新连接，不要去排队
-      return await this.createConnection(userId);
-    }
-
-    // 高优先级请求可以抢占低优先级
-    if (priority === AgentPriority.HIGH && this.currentUser !== userId) {
-      hilog.info(DOMAIN, 'AgentManager', '高优先级请求，要求 %{public}s 释放连接', this.currentUser)
-      await this.forceRelease()
-      return await this.createConnection(userId)
+      // forceRelease may hand ownership to an already queued request. Re-enter
+      // acquisition instead of overwriting that new owner.
+      return await this.acquire(userId, priority, timeout);
     }
 
     // 否则加入等待队列
@@ -154,11 +162,19 @@ class QemuAgentManagerImpl {
       return
     }
 
+    if (this.currentUserLeaseCount > 1) {
+      this.currentUserLeaseCount--
+      hilog.debug(DOMAIN, 'AgentManager', '%{public}s 释放一个复用租约，剩余: %{public}d',
+        userId, this.currentUserLeaseCount)
+      return
+    }
+
     hilog.info(DOMAIN, 'AgentManager', '%{public}s 释放连接 (进入空闲复用状态)', userId)
 
     // 软释放：不关闭连接，只清除使用者标识
     // 这样下次 acquire 可以直接复用
     this.currentUser = null
+    this.currentUserLeaseCount = 0
 
     // 处理等待队列中的下一个请求
     await this.processQueue()
@@ -179,6 +195,7 @@ class QemuAgentManagerImpl {
       this.agent = null
     }
     this.currentUser = null
+    this.currentUserLeaseCount = 0
     this.stopKeepAlive()
 
     // [修复] 强制释放后，唤醒等待队列，防止请求挂起
@@ -188,6 +205,29 @@ class QemuAgentManagerImpl {
   /**
    * 创建新连接
    */
+  private async claimAndCreateConnection(userId: string): Promise<QemuAgent | null> {
+    // Reserve ownership before the first await. Without this reservation two
+    // startup callers can both create/disconnect the shared Agent.
+    this.currentUser = userId
+    this.currentUserLeaseCount = 1
+    const pendingConnection = this.createConnection(userId)
+    this.connectionPromise = pendingConnection
+    let agent: QemuAgent | null = null
+    try {
+      agent = await pendingConnection
+    } finally {
+      if (this.connectionPromise === pendingConnection) {
+        this.connectionPromise = null
+      }
+    }
+    if (!agent && this.currentUser === userId) {
+      this.currentUser = null
+      this.currentUserLeaseCount = 0
+      await this.processQueue()
+    }
+    return agent
+  }
+
   private async createConnection(userId: string): Promise<QemuAgent | null> {
     // 如果已有连接且可用，直接复用
     if (this.agent && this.agent.isAlive()) {
@@ -302,7 +342,18 @@ class QemuAgentManagerImpl {
         const request = this.waitQueue.shift()
         if (request) {
           hilog.info(DOMAIN, 'AgentManager', '处理队列请求: %{public}s', request.userId)
-          const agent = await this.createConnection(request.userId)
+          this.currentUser = request.userId
+          this.currentUserLeaseCount = 1
+          const pendingConnection = this.createConnection(request.userId)
+          this.connectionPromise = pendingConnection
+          let agent: QemuAgent | null = null
+          try {
+            agent = await pendingConnection
+          } finally {
+            if (this.connectionPromise === pendingConnection) {
+              this.connectionPromise = null
+            }
+          }
 
           if (agent) {
             // 连接成功，currentUser 已在 createConnection 中设置
@@ -311,6 +362,10 @@ class QemuAgentManagerImpl {
           } else {
             // 连接失败，继续处理下一个请求
             hilog.warn(DOMAIN, 'AgentManager', '%{public}s 连接失败，尝试下一个请求', request.userId)
+            if (this.currentUser === request.userId) {
+              this.currentUser = null
+              this.currentUserLeaseCount = 0
+            }
             request.resolve(null)
           }
         }

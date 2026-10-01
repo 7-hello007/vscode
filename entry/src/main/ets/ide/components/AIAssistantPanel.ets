@@ -121,7 +121,9 @@ export default struct AIAssistantPanel {
           $r('app.string.ide_ai_context_file'))
           .fontSize(9)
           .fontColor('#7E8794')
-        Text($r('app.string.ide_ai_context_open_files') + ': ' + this.context.openedFiles.length)
+        Text((this.getUIContext().getHostContext()?.resourceManager
+          .getStringByNameSync('ide_ai_context_open_files') || 'Open files') + ': ' +
+          this.context.openedFiles.length)
           .fontSize(9)
           .fontColor('#7E8794')
       }

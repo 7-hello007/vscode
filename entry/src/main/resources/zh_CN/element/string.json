@@ -1849,6 +1849,50 @@
       "value": "保存  Ctrl+S"
     },
     {
+      "name": "ide_problems_title",
+      "value": "问题"
+    },
+    {
+      "name": "ide_problems_check_current",
+      "value": "检查当前文件"
+    },
+    {
+      "name": "ide_problems_check_project",
+      "value": "检查项目"
+    },
+    {
+      "name": "ide_problems_cancel",
+      "value": "取消"
+    },
+    {
+      "name": "ide_problems_clear",
+      "value": "清除"
+    },
+    {
+      "name": "ide_problems_empty",
+      "value": "没有可显示的问题"
+    },
+    {
+      "name": "ide_menu_close_saved_files",
+      "value": "关闭已保存文件"
+    },
+    {
+      "name": "ide_menu_close_all_files",
+      "value": "关闭所有文件"
+    },
+    {
+      "name": "ide_close_all_unsaved_title",
+      "value": "存在未保存文件"
+    },
+    {
+      "name": "ide_close_all_unsaved_message",
+      "value": "关闭前将保存所有未保存文件。保存失败的文件将保持打开。"
+    },
+    {
+      "name": "ide_save_and_close",
+      "value": "保存并关闭"
+    },
+    {
       "name": "ide_menu_plugins",
       "value": "插件"
     },
