@@ -77,6 +77,15 @@ export default class EntryAbility extends UIAbility {
       uiContext.setKeyboardAvoidMode(KeyboardAvoidMode.RESIZE);
       mainWindow.setWindowKeepScreenOn(AppStorage.get(appOption.keepScreenOn) as boolean);
 
+      if (deviceInfo.deviceType === '2in1' || deviceInfo.deviceType === 'tablet') {
+        try {
+          await mainWindow.setWindowLayoutFullScreen(true);
+          mainWindow.setImmersiveModeEnabledState(true);
+        } catch (error) {
+          hilog.warn(DOMAIN, 'testTag', 'Unable to enable immersive IDE layout: %{public}s', JSON.stringify(error));
+        }
+      }
+
       AppStorage.setOrCreate('mainWindow', mainWindow)
 
       if (canIUse('SystemCapability.Window.SessionManager')

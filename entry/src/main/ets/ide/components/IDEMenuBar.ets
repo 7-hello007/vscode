@@ -28,10 +28,28 @@ export default struct IDEMenuBar {
   @Require onUserGuide: () => void
   @State popupVisible: boolean = false
   @State activeSection: IDEMainMenuSection = IDEMainMenuSection.FILE
+  @State actionsVisible: boolean = false
 
   private invoke(action: () => void): void {
     this.popupVisible = false
+    this.actionsVisible = false
     action()
+  }
+
+  private openSection(section: IDEMainMenuSection): void {
+    this.activeSection = section
+    this.actionsVisible = true
+  }
+
+  private sectionLabel(section: IDEMainMenuSection): Resource {
+    if (section === IDEMainMenuSection.FILE) return $r('app.string.ide_menu_file')
+    if (section === IDEMainMenuSection.EDIT) return $r('app.string.ide_menu_edit')
+    if (section === IDEMainMenuSection.SELECTION) return $r('app.string.ide_menu_selection')
+    if (section === IDEMainMenuSection.VIEW) return $r('app.string.ide_menu_view')
+    if (section === IDEMainMenuSection.GO) return $r('app.string.ide_menu_go')
+    if (section === IDEMainMenuSection.RUN) return $r('app.string.ide_menu_run')
+    if (section === IDEMainMenuSection.TERMINAL) return $r('app.string.ide_menu_terminal')
+    return $r('app.string.ide_menu_help')
   }
 
   @Builder
@@ -40,9 +58,9 @@ export default struct IDEMenuBar {
       .width('100%')
       .height(34)
       .fontSize(12)
-      .fontColor(section === this.activeSection ? '#FFFFFF' : '#B7C1CE')
-      .backgroundColor(section === this.activeSection ? '#243B63' : Color.Transparent)
-      .onClick(() => this.activeSection = section)
+      .fontColor('#D7DAE0')
+      .backgroundColor(Color.Transparent)
+      .onClick(() => this.openSection(section))
   }
 
   @Builder
@@ -97,31 +115,53 @@ export default struct IDEMenuBar {
 
   @Builder
   private popupBuilder() {
-    Row() {
-      Column() {
-        this.sectionButton($r('app.string.ide_menu_file'), IDEMainMenuSection.FILE)
-        this.sectionButton($r('app.string.ide_menu_edit'), IDEMainMenuSection.EDIT)
-        this.sectionButton($r('app.string.ide_menu_selection'), IDEMainMenuSection.SELECTION)
-        this.sectionButton($r('app.string.ide_menu_view'), IDEMainMenuSection.VIEW)
-        this.sectionButton($r('app.string.ide_menu_go'), IDEMainMenuSection.GO)
-        this.sectionButton($r('app.string.ide_menu_run'), IDEMainMenuSection.RUN)
-        this.sectionButton($r('app.string.ide_menu_terminal'), IDEMainMenuSection.TERMINAL)
-        this.sectionButton($r('app.string.ide_menu_help'), IDEMainMenuSection.HELP)
-      }
-      .width(112)
-      .padding(4)
-      .backgroundColor('#181B20')
+    Column() {
+      if (!this.actionsVisible) {
+        Column() {
+          this.sectionButton($r('app.string.ide_menu_file'), IDEMainMenuSection.FILE)
+          this.sectionButton($r('app.string.ide_menu_edit'), IDEMainMenuSection.EDIT)
+          this.sectionButton($r('app.string.ide_menu_selection'), IDEMainMenuSection.SELECTION)
+          this.sectionButton($r('app.string.ide_menu_view'), IDEMainMenuSection.VIEW)
+          this.sectionButton($r('app.string.ide_menu_go'), IDEMainMenuSection.GO)
+          this.sectionButton($r('app.string.ide_menu_run'), IDEMainMenuSection.RUN)
+          this.sectionButton($r('app.string.ide_menu_terminal'), IDEMainMenuSection.TERMINAL)
+          this.sectionButton($r('app.string.ide_menu_help'), IDEMainMenuSection.HELP)
+        }
+        .width('100%')
+        .padding(4)
+        .backgroundColor('#181B20')
+      } else {
+        Row({ space: 8 }) {
+          Button('‹', { buttonStyle: ButtonStyleMode.TEXTUAL })
+            .width(34)
+            .height(34)
+            .fontSize(22)
+            .fontColor('#D7DAE0')
+            .padding(0)
+            .backgroundColor(Color.Transparent)
+            .onClick(() => this.actionsVisible = false)
+          Text(this.sectionLabel(this.activeSection))
+            .fontSize(12)
+            .fontColor('#D7DAE0')
+            .layoutWeight(1)
+        }
+        .width('100%')
+        .height(38)
+        .padding({ left: 4, right: 8 })
+        .backgroundColor('#181B20')
 
-      Divider().vertical(true).height('100%').color('#30343B')
+        Divider().color('#30343B')
 
-      Scroll() {
-        this.actionPanel()
+        Scroll() {
+          this.actionPanel()
+        }
+        .width('100%')
+        .layoutWeight(1)
+        .scrollBar(BarState.Auto)
+        .backgroundColor('#20242B')
       }
-      .width(220)
-      .height(280)
-      .scrollBar(BarState.Auto)
-      .backgroundColor('#20242B')
     }
+    .width(this.actionsVisible ? 240 : 160)
     .height(280)
     .border({ width: 1, color: '#3B414B' })
     .borderRadius(6)
@@ -134,13 +174,23 @@ export default struct IDEMenuBar {
       .height(32)
       .width(38)
       .padding(0)
-      .onClick(() => this.popupVisible = !this.popupVisible)
+      .onClick(() => {
+        if (!this.popupVisible) {
+          this.actionsVisible = false
+        }
+        this.popupVisible = !this.popupVisible
+      })
       .bindPopup(this.popupVisible, {
         builder: this.popupBuilder,
         placement: Placement.BottomLeft,
         popupColor: '#20242B',
         enableArrow: false,
-        onStateChange: (event: PopupStateChangeParam) => this.popupVisible = event.isVisible
+        onStateChange: (event: PopupStateChangeParam) => {
+          this.popupVisible = event.isVisible
+          if (!event.isVisible) {
+            this.actionsVisible = false
+          }
+        }
       })
   }
 }

@@ -1,4 +1,5 @@
 import { connection } from '@kit.NetworkKit'
+import { wifiManager } from '@kit.ConnectivityKit'
 
 @Component
 export default struct IDEStatusBar {
@@ -8,24 +9,30 @@ export default struct IDEStatusBar {
   @Prop column: number = 1
   @Prop encoding: string = 'UTF-8'
   @Prop lineEnding: string = 'LF'
-  @State currentTime: string = '--:--'
+  @State currentTime: string = '--:--:--'
   @State networkName: string = 'Network unavailable'
   @State networkColor: string = '#7E8794'
-  private refreshTimer: number = -1
+  @State networkQualityAvailable: boolean = false
+  private clockTimer: number = -1
+  private networkTimer: number = -1
 
   aboutToAppear(): void {
     this.refreshClock()
     void this.refreshNetwork()
-    this.refreshTimer = setInterval((): void => {
-      this.refreshClock()
+    this.clockTimer = setInterval((): void => this.refreshClock(), 1000)
+    this.networkTimer = setInterval((): void => {
       void this.refreshNetwork()
     }, 30000)
   }
 
   aboutToDisappear(): void {
-    if (this.refreshTimer !== -1) {
-      clearInterval(this.refreshTimer)
-      this.refreshTimer = -1
+    if (this.clockTimer !== -1) {
+      clearInterval(this.clockTimer)
+      this.clockTimer = -1
+    }
+    if (this.networkTimer !== -1) {
+      clearInterval(this.networkTimer)
+      this.networkTimer = -1
     }
   }
 
@@ -33,43 +40,81 @@ export default struct IDEStatusBar {
     const now = new Date()
     const hours = now.getHours().toString().padStart(2, '0')
     const minutes = now.getMinutes().toString().padStart(2, '0')
-    this.currentTime = hours + ':' + minutes
+    const seconds = now.getSeconds().toString().padStart(2, '0')
+    this.currentTime = hours + ':' + minutes + ':' + seconds
   }
 
   private async refreshNetwork(): Promise<void> {
     try {
       const netHandle = await connection.getDefaultNet()
       const capabilities = await connection.getNetCapabilities(netHandle)
-      this.networkName = this.bearerName(capabilities.bearerTypes)
+      if (this.hasBearer(capabilities.bearerTypes, connection.NetBearType.BEARER_WIFI)) {
+        try {
+          const linkedInfo = await wifiManager.getLinkedInfo()
+          this.networkName = linkedInfo.ssid || 'Wi-Fi name unavailable'
+          const signalLevel = wifiManager.getSignalLevel(linkedInfo.rssi, linkedInfo.band)
+          this.applyWifiSignalLevel(signalLevel)
+          return
+        } catch (error) {
+          this.networkName = 'Wi-Fi name unavailable'
+        }
+      } else {
+        this.networkName = this.bearerFallbackName(capabilities.bearerTypes)
+      }
       const bandwidth = Math.max(capabilities.linkDownBandwidthKbps || 0,
         capabilities.linkUpBandwidthKbps || 0)
       if (bandwidth <= 0) {
         this.networkName += ' · quality unavailable'
         this.networkColor = '#7E8794'
+        this.networkQualityAvailable = false
       } else if (bandwidth < 1000) {
         this.networkColor = '#E35D6A'
+        this.networkQualityAvailable = true
       } else if (bandwidth < 10000) {
         this.networkColor = '#E8C547'
+        this.networkQualityAvailable = true
       } else if (bandwidth < 50000) {
         this.networkColor = '#5AA9E6'
+        this.networkQualityAvailable = true
       } else {
         this.networkColor = '#55C271'
+        this.networkQualityAvailable = true
       }
     } catch (error) {
       this.networkName = 'Network unavailable'
       this.networkColor = '#7E8794'
+      this.networkQualityAvailable = false
     }
   }
 
-  private bearerName(bearerTypes: connection.NetBearType[]): string {
+  private hasBearer(bearerTypes: connection.NetBearType[], expected: connection.NetBearType): boolean {
     for (const bearer of bearerTypes) {
-      if (bearer === connection.NetBearType.BEARER_WIFI) return 'Wi-Fi'
-      if (bearer === connection.NetBearType.BEARER_ETHERNET) return 'Ethernet'
-      if (bearer === connection.NetBearType.BEARER_CELLULAR) return 'Cellular'
-      if (bearer === connection.NetBearType.BEARER_BLUETOOTH) return 'Bluetooth'
-      if (bearer === connection.NetBearType.BEARER_VPN) return 'VPN'
+      if (bearer === expected) return true
     }
-    return 'Network type unavailable'
+    return false
+  }
+
+  private bearerFallbackName(bearerTypes: connection.NetBearType[]): string {
+    for (const bearer of bearerTypes) {
+      if (bearer === connection.NetBearType.BEARER_ETHERNET) return 'Ethernet · name unavailable'
+      if (bearer === connection.NetBearType.BEARER_CELLULAR) return 'Cellular · name unavailable'
+      if (bearer === connection.NetBearType.BEARER_BLUETOOTH) return 'Bluetooth · name unavailable'
+      if (bearer === connection.NetBearType.BEARER_VPN) return 'VPN · name unavailable'
+    }
+    return 'Network name unavailable'
+  }
+
+  private applyWifiSignalLevel(signalLevel: number): void {
+    this.networkQualityAvailable = true
+    if (signalLevel <= 1) {
+      this.networkColor = '#E35D6A'
+    } else if (signalLevel === 2) {
+      this.networkColor = '#E8C547'
+    } else if (signalLevel === 3) {
+      this.networkColor = '#5AA9E6'
+    } else {
+      this.networkColor = '#55C271'
+    }
   }
 
   private visualPath(): string {
@@ -89,7 +134,7 @@ export default struct IDEStatusBar {
         .maxLines(1)
         .textOverflow({ overflow: TextOverflow.Ellipsis })
         .layoutWeight(1)
-      Text('| Ln ' + this.line + ', Col ' + this.column + ' | ' + this.encoding + ' | ' + this.lineEnding)
+      Text('Ln ' + this.line + ', Col ' + this.column + '   ' + this.encoding + '   ' + this.lineEnding)
         .fontSize(10)
         .fontColor('#B7C1CE')
         .maxLines(1)
@@ -98,15 +143,27 @@ export default struct IDEStatusBar {
         .fontColor('#B7C1CE')
         .maxLines(1)
         .textOverflow({ overflow: TextOverflow.Ellipsis })
-      Text('●')
+      Text('|')
+        .fontSize(10)
+        .fontColor('#7E8794')
+      Text(this.networkQualityAvailable ? '●' : '○')
         .fontSize(10)
         .fontColor(this.networkColor)
+      Text('|')
+        .fontSize(10)
+        .fontColor('#7E8794')
       Text(this.currentTime)
         .fontSize(10)
         .fontColor('#B7C1CE')
+      Text('|')
+        .fontSize(10)
+        .fontColor('#7E8794')
       Text(this.dirty ? $r('app.string.ide_status_modified') : $r('app.string.ide_status_saved'))
         .fontSize(10)
         .fontColor(this.dirty ? '#F6C177' : '#B7C1CE')
+      Text('|')
+        .fontSize(10)
+        .fontColor('#7E8794')
       Text($r('app.string.ide_status_linux'))
         .fontSize(10)
         .fontColor('#B7C1CE')
