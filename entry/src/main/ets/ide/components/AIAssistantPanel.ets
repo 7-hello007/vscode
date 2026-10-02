@@ -13,6 +13,7 @@ class AIProviderMenuOption {
 
 @Component
 export default struct AIAssistantPanel {
+  @Prop headerVisible: boolean = true
   @Prop context: IDEAIContext = new IDEAIContext('', '', '', 'plaintext', [], '')
   @Prop providers: IDEAIProviderInfo[] = []
   @Prop selectedProviderId: string = ''
@@ -83,37 +84,39 @@ export default struct AIAssistantPanel {
 
   build() {
     Column() {
-      Row() {
-        Text($r('app.string.ide_ai_title'))
-          .fontSize(12)
-          .fontWeight(FontWeight.Medium)
-          .fontColor('#D7DAE0')
-          .letterSpacing(0.6)
-        Blank()
-        Button($r('app.string.ide_ai_clear_conversation'), { buttonStyle: ButtonStyleMode.TEXTUAL })
-          .fontSize(9)
-          .fontColor('#939CAA')
-          .height(28)
-          .enabled(this.messages.length > 0 && !this.busy)
-          .onClick(() => this.onClearConversation())
-        if (this.providers.length > 0) {
-          Button(this.selectedProvider()?.name || $r('app.string.ide_ai_choose_provider'),
-            { buttonStyle: ButtonStyleMode.TEXTUAL })
-            .fontSize(10)
-            .fontColor('#AEB6C2')
-            .height(28)
-            .bindMenu(this.providerMenu())
-        } else {
-          Text($r('app.string.ide_ai_no_provider'))
+      if (this.headerVisible) {
+        Row() {
+          Text($r('app.string.ide_ai_title'))
+            .fontSize(12)
+            .fontWeight(FontWeight.Medium)
+            .fontColor('#D7DAE0')
+            .letterSpacing(0.6)
+          Blank()
+          Button($r('app.string.ide_ai_clear_conversation'), { buttonStyle: ButtonStyleMode.TEXTUAL })
             .fontSize(9)
-            .fontColor('#D09A61')
+            .fontColor('#939CAA')
+            .height(28)
+            .enabled(this.messages.length > 0 && !this.busy)
+            .onClick(() => this.onClearConversation())
+          if (this.providers.length > 0) {
+            Button(this.selectedProvider()?.name || $r('app.string.ide_ai_choose_provider'),
+              { buttonStyle: ButtonStyleMode.TEXTUAL })
+              .fontSize(10)
+              .fontColor('#AEB6C2')
+              .height(28)
+              .bindMenu(this.providerMenu())
+          } else {
+            Text($r('app.string.ide_ai_no_provider'))
+              .fontSize(9)
+              .fontColor('#D09A61')
+          }
         }
-      }
-      .width('100%')
-      .height(36)
-      .padding({ left: 12, right: 10 })
+        .width('100%')
+        .height(36)
+        .padding({ left: 12, right: 10 })
 
-      Divider().strokeWidth(1).color('#30343B')
+        Divider().strokeWidth(1).color('#30343B')
+      }
 
       Column({ space: 5 }) {
         if (this.context.activeFilePath) {

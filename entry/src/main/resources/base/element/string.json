@@ -2093,6 +2093,30 @@
       "value": "Clear chat"
     },
     {
+      "name": "ide_web_ai_loading",
+      "value": "Loading official AI website..."
+    },
+    {
+      "name": "ide_web_ai_load_failed",
+      "value": "Page load failed"
+    },
+    {
+      "name": "ide_web_ai_unsupported",
+      "value": "This provider is unsupported in ArkWeb"
+    },
+    {
+      "name": "ide_web_ai_retry",
+      "value": "Reload"
+    },
+    {
+      "name": "ide_web_ai_external_link",
+      "value": "External link opened in the system browser"
+    },
+    {
+      "name": "ide_web_ai_external_failed",
+      "value": "Unable to open external link"
+    },
+    {
       "name": "ide_menu_selection",
       "value": "Selection"
     },

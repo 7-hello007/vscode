@@ -3,7 +3,7 @@ import { common } from '@kit.AbilityKit'
 import IDEAIService from './ai/IDEAIService'
 import { ideAIProviderRegistry } from './ai/IDEAIProviderRegistry'
 import { HISH_LOCAL_PROVIDER_ID, localAIProvider } from './ai/LocalAIProvider'
-import AIAssistantPanel from './components/AIAssistantPanel'
+import AIWorkspacePanel from './components/AIWorkspacePanel'
 import CodeEditorPanel from './components/CodeEditorPanel'
 import FileTreePanel from './components/FileTreePanel'
 import IDEMenuBar from './components/IDEMenuBar'
@@ -84,6 +84,7 @@ export default struct IDEWorkbench {
   @State terminalWeight: number = 2
   @State fileTreeWidth: number = 202
   @State aiPanelWidth: number = 280
+  @State workbenchAvailableWidth: number = 0
   @State editorCommandRequest: string = ''
   @State editorCommandSequence: number = 0
   @State pluginStates: IDEPluginState[] = this.pluginRegistry.list()
@@ -324,7 +325,7 @@ export default struct IDEWorkbench {
         this.terminalVisible = session.terminalVisible
         this.aiVisible = session.aiVisible
         this.fileTreeWidth = session.fileTreeWidth
-        this.aiPanelWidth = session.aiPanelWidth
+        this.aiPanelWidth = this.clampAIPanelWidth(session.aiPanelWidth)
         this.editorWeight = session.editorWeight
         this.terminalWeight = session.terminalWeight
         this.fileTreeRootPath = restoredRoot
@@ -838,7 +839,7 @@ export default struct IDEWorkbench {
     this.editorWeight = 3
     this.terminalWeight = 2
     this.fileTreeWidth = this.compactLayout ? 162 : 202
-    this.aiPanelWidth = this.compactLayout ? 220 : 280
+    this.aiPanelWidth = this.clampAIPanelWidth(this.compactLayout ? 220 : 280)
     this.scheduleSessionSave()
   }
 
@@ -850,10 +851,31 @@ export default struct IDEWorkbench {
   }
 
   private resizeAIPanel(offset: number): void {
-    const minimum = this.compactLayout ? 180 : 220
-    const maximum = this.compactLayout ? 320 : 360
-    this.aiPanelWidth = Math.max(minimum, Math.min(maximum, this.aiPanelResizeStartWidth - offset))
+    this.aiPanelWidth = this.clampAIPanelWidth(this.aiPanelResizeStartWidth - offset)
+  }
+
+  private finishAIPanelResize(): void {
     this.scheduleSessionSave()
+  }
+
+  private clampAIPanelWidth(width: number): number {
+    const preferredMinimum = this.compactLayout ? 180 : 220
+    if (this.workbenchAvailableWidth <= 0) {
+      return Math.max(preferredMinimum, width)
+    }
+    const maximum = this.workbenchAvailableWidth * 0.5
+    const minimum = Math.min(preferredMinimum, maximum)
+    return Math.max(minimum, Math.min(maximum, width))
+  }
+
+  private updateWorkbenchAvailableWidth(width: number): void {
+    if (width <= 0 || width === this.workbenchAvailableWidth) return
+    this.workbenchAvailableWidth = width
+    const clamped = this.clampAIPanelWidth(this.aiPanelWidth)
+    if (clamped !== this.aiPanelWidth) {
+      this.aiPanelWidth = clamped
+      this.scheduleSessionSave()
+    }
   }
 
   private resizeEditorTerminal(offset: number): void {
@@ -1408,9 +1430,11 @@ export default struct IDEWorkbench {
               PanGesture({ direction: PanDirection.Horizontal, distance: 1 })
                 .onActionStart(() => this.aiPanelResizeStartWidth = this.aiPanelWidth)
                 .onActionUpdate((event: GestureEvent) => this.resizeAIPanel(event.offsetX))
+                .onActionEnd(() => this.finishAIPanelResize())
+                .onActionCancel(() => this.finishAIPanelResize())
             )
 
-          AIAssistantPanel({
+          AIWorkspacePanel({
             context: this.buildAIContext(),
             providers: this.aiProviders,
             selectedProviderId: this.activeAIProviderId,
@@ -1428,6 +1452,9 @@ export default struct IDEWorkbench {
       }
       .width('100%')
       .layoutWeight(1)
+      .onAreaChange((_oldValue: Area, newValue: Area): void => {
+        this.updateWorkbenchAvailableWidth(Number(newValue.width))
+      })
 
       IDEStatusBar({
         activeFilePath: this.activeFilePath,

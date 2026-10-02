@@ -2093,6 +2093,30 @@
       "value": "清空聊天记录"
     },
     {
+      "name": "ide_web_ai_loading",
+      "value": "正在加载 AI 官方网站……"
+    },
+    {
+      "name": "ide_web_ai_load_failed",
+      "value": "页面加载失败"
+    },
+    {
+      "name": "ide_web_ai_unsupported",
+      "value": "当前 Provider 不支持在 ArkWeb 中使用"
+    },
+    {
+      "name": "ide_web_ai_retry",
+      "value": "重新加载"
+    },
+    {
+      "name": "ide_web_ai_external_link",
+      "value": "外部链接已交给系统浏览器"
+    },
+    {
+      "name": "ide_web_ai_external_failed",
+      "value": "无法打开外部链接"
+    },
+    {
       "name": "ide_menu_selection",
       "value": "选择"
     },

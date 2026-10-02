@@ -65,7 +65,8 @@ export default class IDESessionStore {
     session.terminalVisible = typeof value.terminalVisible === 'boolean' ? value.terminalVisible : true
     session.aiVisible = typeof value.aiVisible === 'boolean' ? value.aiVisible : true
     session.fileTreeWidth = this.numberInRange(value.fileTreeWidth, 140, 360, 202)
-    session.aiPanelWidth = this.numberInRange(value.aiPanelWidth, 180, 400, 280)
+    // The Workbench clamps this persisted width against its current measured 50% boundary.
+    session.aiPanelWidth = this.numberInRange(value.aiPanelWidth, 180, 10000, 280)
     session.editorWeight = this.numberInRange(value.editorWeight, 1, 4, 3)
     session.terminalWeight = this.numberInRange(value.terminalWeight, 1, 4, 2)
     return session
