@@ -1,5 +1,5 @@
 import { IDEAIProviderRegistry } from './IDEAIProviderRegistry'
-import { IDEAIRequest, IDEAIResponse } from '../model/IDEAIContracts'
+import { IDEAIConversationTurn, IDEAIRequest, IDEAIResponse } from '../model/IDEAIContracts'
 
 export class IDEAIServiceError extends Error {
   constructor(message: string) {
@@ -11,6 +11,7 @@ export class IDEAIServiceError extends Error {
 /** Provider-neutral orchestration boundary used by the Workbench. */
 export default class IDEAIService {
   private registry: IDEAIProviderRegistry
+  private conversationHistory: IDEAIConversationTurn[] = []
 
   constructor(registry: IDEAIProviderRegistry) {
     this.registry = registry
@@ -24,6 +25,17 @@ export default class IDEAIService {
     if (!provider.getInfo().available) {
       throw new IDEAIServiceError('AI provider is not available')
     }
-    return provider.generate(request)
+    const historySnapshot: IDEAIConversationTurn[] = []
+    for (const turn of this.conversationHistory) {
+      historySnapshot.push(new IDEAIConversationTurn(turn.user, turn.assistant))
+    }
+    const response = await provider.generate(
+      new IDEAIRequest(request.prompt, request.context, historySnapshot))
+    this.conversationHistory.push(new IDEAIConversationTurn(request.prompt, response.content))
+    return response
+  }
+
+  clearConversation(): void {
+    this.conversationHistory = []
   }
 }

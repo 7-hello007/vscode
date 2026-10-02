@@ -1,5 +1,6 @@
 import { connection } from '@kit.NetworkKit'
 import { wifiManager } from '@kit.ConnectivityKit'
+import IDEHostStatusAdapter from '../system/IDEHostStatusAdapter'
 
 @Component
 export default struct IDEStatusBar {
@@ -13,6 +14,8 @@ export default struct IDEStatusBar {
   @State networkName: string = 'Network unavailable'
   @State networkColor: string = '#7E8794'
   @State networkQualityAvailable: boolean = false
+  @State batteryPercentage: number = -1
+  private hostStatusAdapter: IDEHostStatusAdapter = new IDEHostStatusAdapter()
   private clockTimer: number = -1
   private networkTimer: number = -1
 
@@ -23,6 +26,9 @@ export default struct IDEStatusBar {
     this.networkTimer = setInterval((): void => {
       void this.refreshNetwork()
     }, 30000)
+    this.hostStatusAdapter.start((percentage: number): void => {
+      this.batteryPercentage = percentage
+    })
   }
 
   aboutToDisappear(): void {
@@ -34,6 +40,7 @@ export default struct IDEStatusBar {
       clearInterval(this.networkTimer)
       this.networkTimer = -1
     }
+    this.hostStatusAdapter.stop()
   }
 
   private refreshClock(): void {
@@ -126,6 +133,14 @@ export default struct IDEStatusBar {
     return parts.join(' > ')
   }
 
+  private batteryColor(): string {
+    if (this.batteryPercentage < 0) return '#7E8794'
+    if (this.batteryPercentage > 50) return '#55C271'
+    if (this.batteryPercentage > 20) return '#E8C547'
+    if (this.batteryPercentage > 10) return '#E59A45'
+    return '#E35D6A'
+  }
+
   build() {
     Row() {
       Row({ space: 12 }) {
@@ -167,9 +182,12 @@ export default struct IDEStatusBar {
         Text(this.dirty ? $r('app.string.ide_status_modified') : $r('app.string.ide_status_saved'))
           .fontSize(10)
           .fontColor(this.dirty ? '#F6C177' : '#B7C1CE')
-        Text($r('app.string.ide_status_linux'))
+        Text('HiSH Editor')
           .fontSize(10)
           .fontColor('#B7C1CE')
+        Text('●')
+          .fontSize(10)
+          .fontColor(this.batteryColor())
       }
     }
     .width('100%')

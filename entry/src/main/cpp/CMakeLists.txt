@@ -19,6 +19,74 @@ include(GNUInstallDirs)
 
 set(NATIVERENDER_ROOT_PATH ${CMAKE_CURRENT_SOURCE_DIR})
 
+# Local AI runtime: embed only llama.cpp's portable CPU backend.  The app's
+# native entry remains a shared library; llama/ggml are linked into it as
+# position-independent static libraries.
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+set(BUILD_SHARED_LIBS OFF CACHE BOOL "Build native dependencies statically" FORCE)
+set(LLAMA_BUILD_COMMON OFF CACHE BOOL "" FORCE)
+set(LLAMA_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(LLAMA_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
+set(LLAMA_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(LLAMA_BUILD_SERVER OFF CACHE BOOL "" FORCE)
+set(LLAMA_BUILD_APP OFF CACHE BOOL "" FORCE)
+set(LLAMA_BUILD_UI OFF CACHE BOOL "" FORCE)
+set(LLAMA_BUILD_MTMD OFF CACHE BOOL "" FORCE)
+set(LLAMA_CURL OFF CACHE BOOL "" FORCE)
+set(GGML_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(GGML_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(GGML_NATIVE OFF CACHE BOOL "" FORCE)
+set(GGML_CPU ON CACHE BOOL "" FORCE)
+set(GGML_CPU_REPACK OFF CACHE BOOL "" FORCE)
+set(GGML_CPU_KLEIDIAI OFF CACHE BOOL "" FORCE)
+set(GGML_CPU_ALL_VARIANTS OFF CACHE BOOL "" FORCE)
+set(GGML_OPENMP OFF CACHE BOOL "" FORCE)
+set(GGML_BLAS OFF CACHE BOOL "" FORCE)
+set(GGML_CUDA OFF CACHE BOOL "" FORCE)
+set(GGML_HIP OFF CACHE BOOL "" FORCE)
+set(GGML_VULKAN OFF CACHE BOOL "" FORCE)
+set(GGML_METAL OFF CACHE BOOL "" FORCE)
+set(GGML_RPC OFF CACHE BOOL "" FORCE)
+set(GGML_SYCL OFF CACHE BOOL "" FORCE)
+set(GGML_OPENCL OFF CACHE BOOL "" FORCE)
+set(GGML_BACKEND_DL OFF CACHE BOOL "" FORCE)
+
+add_subdirectory(
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/llama.cpp
+    ${CMAKE_CURRENT_BINARY_DIR}/llama.cpp
+    EXCLUDE_FROM_ALL
+)
+
+# DevEco's HarmonyOS Ninja pipeline does not emit a usable PCH dependency when
+# llama's forced Unity build is enabled. Disable these compile-time-only
+# optimizations on this target; no llama.cpp source or runtime behavior changes.
+set_target_properties(llama PROPERTIES
+    UNITY_BUILD OFF
+    DISABLE_PRECOMPILE_HEADERS ON
+)
+
+# DevEco debug builds add -O0 globally. That makes ggml's quantized CPU kernels
+# unusably slow on-device even though the ARM64/NEON backend is selected. Keep
+# app debug symbols, but compile the pinned inference engine with optimized
+# machine code in every configuration. These options are intentionally scoped
+# to llama.cpp/ggml and do not change the rest of HiSH.
+foreach(LOCAL_AI_OPTIMIZED_TARGET llama ggml ggml-base ggml-cpu)
+    if(TARGET ${LOCAL_AI_OPTIMIZED_TARGET})
+        target_compile_options(${LOCAL_AI_OPTIMIZED_TARGET} PRIVATE -O3)
+    endif()
+endforeach()
+
+# The OHOS clang target defines __linux__, while the HarmonyOS musl NDK does
+# not expose glibc's cpu_set_t / pthread_setaffinity_np API. Make only the C
+# thread-pool source select ggml's existing portable no-affinity branch.
+if(OHOS OR CMAKE_SYSTEM_NAME STREQUAL "OHOS")
+    set_property(
+        SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/third_party/llama.cpp/ggml/src/ggml-cpu/ggml-cpu.c
+        TARGET_DIRECTORY ggml-cpu
+        APPEND PROPERTY COMPILE_OPTIONS -U__linux__
+    )
+endif()
+
 if(DEFINED PACKAGE_FIND_FILE)
     include(${PACKAGE_FIND_FILE})
 endif()
@@ -96,6 +164,8 @@ include_directories(
     ${NATIVERENDER_ROOT_PATH}/include
     ${NATIVERENDER_ROOT_PATH}/libvncserver/include
     ${NATIVERENDER_ROOT_PATH}/libvncserver/src/common
+    ${NATIVERENDER_ROOT_PATH}/third_party/llama.cpp/vendor/hash/sha256
+    ${NATIVERENDER_ROOT_PATH}/third_party/llama.cpp/vendor/hash
     ${LIBVNCCLIENT_DIR}
     ${CMAKE_CURRENT_BINARY_DIR}/include
 )
@@ -103,7 +173,11 @@ include_directories(
 # HiSH sources
 add_library(entry SHARED
     napi_init.cpp
+    napi_local_inference.cpp
     napi_vnc.cpp
+    local_inference_runtime.cpp
+    local_model_installer.cpp
+    third_party/llama.cpp/vendor/hash/sha256/sha256.c
     vnc_client.cpp
     vnc_renderer.cpp
     utils.cpp
@@ -111,7 +185,9 @@ add_library(entry SHARED
 )
 
 target_link_libraries(entry PUBLIC
+    llama
     libace_napi.z.so
+    librawfile.z.so
     libhilog_ndk.z.so
     libEGL.so
     libGLESv3.so

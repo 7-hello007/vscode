@@ -46,10 +46,23 @@ export class IDEAIContext {
 export class IDEAIRequest {
   prompt: string
   context: IDEAIContext
+  history: IDEAIConversationTurn[]
 
-  constructor(prompt: string, context: IDEAIContext) {
+  constructor(prompt: string, context: IDEAIContext, history: IDEAIConversationTurn[] = []) {
     this.prompt = prompt
     this.context = context
+    this.history = history
+  }
+}
+
+/** One completed exchange retained by the provider-neutral AI service. */
+export class IDEAIConversationTurn {
+  user: string
+  assistant: string
+
+  constructor(user: string, assistant: string) {
+    this.user = user
+    this.assistant = assistant
   }
 }
 

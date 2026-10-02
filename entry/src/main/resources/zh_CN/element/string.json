@@ -2009,10 +2009,6 @@
       "value": "已保存"
     },
     {
-      "name": "ide_status_linux",
-      "value": "HiSH Linux"
-    },
-    {
       "name": "ide_ai_choose_provider",
       "value": "选择 Provider"
     },
@@ -2045,6 +2041,26 @@
       "value": "注册 Cloud API 或 Local Model Provider 后即可启用对话。当前未绑定模型或服务。"
     },
     {
+      "name": "ide_ai_local_ready_title",
+      "value": "本地模型已就绪"
+    },
+    {
+      "name": "ide_ai_local_ready_hint",
+      "value": "离线问答已可用。"
+    },
+    {
+      "name": "ide_ai_local_preparing_hint",
+      "value": "正在校验并加载应用内置模型。"
+    },
+    {
+      "name": "ide_ai_local_error_title",
+      "value": "本地模型不可用"
+    },
+    {
+      "name": "ide_ai_local_error_hint",
+      "value": "请查看下方模型错误。"
+    },
+    {
       "name": "ide_ai_you",
       "value": "你"
     },
@@ -2061,8 +2077,20 @@
       "value": "思考中……"
     },
     {
+      "name": "ide_ai_preparing_model",
+      "value": "正在准备离线模型……"
+    },
+    {
+      "name": "ide_ai_stop",
+      "value": "停止"
+    },
+    {
       "name": "ide_ai_request_failed",
       "value": "AI 请求失败"
+    },
+    {
+      "name": "ide_ai_clear_conversation",
+      "value": "清空聊天记录"
     },
     {
       "name": "ide_menu_selection",

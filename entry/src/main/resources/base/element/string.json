@@ -2009,10 +2009,6 @@
       "value": "Saved"
     },
     {
-      "name": "ide_status_linux",
-      "value": "HiSH Linux"
-    },
-    {
       "name": "ide_ai_choose_provider",
       "value": "Choose provider"
     },
@@ -2045,6 +2041,26 @@
       "value": "Register a Cloud API or Local Model provider to enable chat. No model or service is bundled."
     },
     {
+      "name": "ide_ai_local_ready_title",
+      "value": "Local model ready"
+    },
+    {
+      "name": "ide_ai_local_ready_hint",
+      "value": "Offline chat is ready."
+    },
+    {
+      "name": "ide_ai_local_preparing_hint",
+      "value": "Verifying and loading the bundled local model."
+    },
+    {
+      "name": "ide_ai_local_error_title",
+      "value": "Local model unavailable"
+    },
+    {
+      "name": "ide_ai_local_error_hint",
+      "value": "See the model error below."
+    },
+    {
       "name": "ide_ai_you",
       "value": "YOU"
     },
@@ -2061,8 +2077,20 @@
       "value": "Thinking..."
     },
     {
+      "name": "ide_ai_preparing_model",
+      "value": "Preparing offline model..."
+    },
+    {
+      "name": "ide_ai_stop",
+      "value": "Stop"
+    },
+    {
       "name": "ide_ai_request_failed",
       "value": "AI request failed"
+    },
+    {
+      "name": "ide_ai_clear_conversation",
+      "value": "Clear chat"
     },
     {
       "name": "ide_menu_selection",

@@ -1,6 +1,8 @@
 import { CustomContentDialog } from '@kit.ArkUI'
+import { common } from '@kit.AbilityKit'
 import IDEAIService from './ai/IDEAIService'
 import { ideAIProviderRegistry } from './ai/IDEAIProviderRegistry'
+import { HISH_LOCAL_PROVIDER_ID, localAIProvider } from './ai/LocalAIProvider'
 import AIAssistantPanel from './components/AIAssistantPanel'
 import CodeEditorPanel from './components/CodeEditorPanel'
 import FileTreePanel from './components/FileTreePanel'
@@ -89,6 +91,8 @@ export default struct IDEWorkbench {
   @State activeAIProviderId: string = ''
   @State aiMessages: IDEAIMessage[] = []
   @State aiBusy: boolean = false
+  @State aiPreparing: boolean = false
+  @State aiError: string = ''
   @State editorSelectedText: string = ''
   @State editorLanguage: string = 'plaintext'
   @State editorLine: number = 1
@@ -107,6 +111,7 @@ export default struct IDEWorkbench {
   @State openFolderError: string = ''
   @State openFolderBusy: boolean = false
   private aiMessageSequence: number = 0
+  private editorBuffers: Map<string, string> = new Map<string, string>()
   private openingFilePaths: string[] = []
   private fileTreeResizeStartWidth: number = 202
   private aiPanelResizeStartWidth: number = 280
@@ -168,14 +173,29 @@ export default struct IDEWorkbench {
       this.fileTreeWidth = 162
       this.aiPanelWidth = 220
     }
+    void this.initializeLocalAI()
+  }
+
+  private async initializeLocalAI(): Promise<void> {
+    if (!ideAIProviderRegistry.find(HISH_LOCAL_PROVIDER_ID)) {
+      ideAIProviderRegistry.register(localAIProvider)
+    }
+    this.activeAIProviderId = HISH_LOCAL_PROVIDER_ID
     this.aiProviders = ideAIProviderRegistry.list()
-    if (!this.activeAIProviderId) {
-      for (const provider of this.aiProviders) {
-        if (provider.available) {
-          this.activeAIProviderId = provider.id
-          break
-        }
-      }
+    const context = this.getUIContext().getHostContext() as common.UIAbilityContext
+    if (!context) {
+      this.aiError = 'Application context is unavailable'
+      return
+    }
+    this.aiPreparing = true
+    this.aiError = ''
+    try {
+      await localAIProvider.initialize(context)
+    } catch (error) {
+      this.aiError = (error as Error).message || 'Local model initialization failed'
+    } finally {
+      this.aiPreparing = false
+      this.aiProviders = ideAIProviderRegistry.list()
     }
   }
 
@@ -963,19 +983,21 @@ export default struct IDEWorkbench {
 
   private buildAIContext(): IDEAIContext {
     const activeTab = this.findTab(this.activeFilePath)
+    const activeBuffer = activeTab ? (this.editorBuffers.get(activeTab.path) ?? activeTab.content) : ''
+    const activeLanguage = activeTab ? this.languageForPath(activeTab.path) : 'plaintext'
     const openedFiles: IDEAIFileContext[] = []
     for (const tab of this.editorTabs) {
       openedFiles.push(new IDEAIFileContext(
         tab.path,
-        tab.path === this.activeFilePath ? this.editorLanguage : this.languageForPath(tab.path),
-        tab.content,
+        tab.path === this.activeFilePath ? activeLanguage : this.languageForPath(tab.path),
+        tab.path === this.activeFilePath ? activeBuffer : '',
         tab.path === this.activeFilePath))
     }
     return new IDEAIContext(
       activeTab?.path || '',
-      activeTab?.content || '',
+      activeBuffer,
       this.editorSelectedText,
-      activeTab ? this.editorLanguage : 'plaintext',
+      activeLanguage,
       openedFiles,
       this.terminalOutput)
   }
@@ -992,6 +1014,7 @@ export default struct IDEWorkbench {
       return
     }
     const context = this.buildAIContext()
+    this.aiError = ''
     this.addAIMessage(IDEAIMessageRole.USER, prompt.trim())
     this.aiBusy = true
     try {
@@ -1001,10 +1024,25 @@ export default struct IDEWorkbench {
     } catch (error) {
       const message = this.getUIContext().getHostContext()?.resourceManager
         .getStringByNameSync('ide_ai_request_failed') || 'AI request failed'
-      this.addAIMessage(IDEAIMessageRole.SYSTEM, message + ': ' + (error as Error).message)
+      this.aiError = message + ': ' + (error as Error).message
+      this.addAIMessage(IDEAIMessageRole.SYSTEM, this.aiError)
     } finally {
       this.aiBusy = false
     }
+  }
+
+  private stopAIRequest(): void {
+    if (this.aiBusy && this.activeAIProviderId === HISH_LOCAL_PROVIDER_ID) {
+      localAIProvider.stop()
+    }
+  }
+
+  private clearAIConversation(): void {
+    if (this.aiBusy) {
+      return
+    }
+    this.aiService.clearConversation()
+    this.aiMessages = []
   }
 
   @Builder
@@ -1110,6 +1148,11 @@ export default struct IDEWorkbench {
         uniqueTabs.push(tab)
       }
     }
+    const buffers = new Map<string, string>()
+    for (const tab of uniqueTabs) {
+      buffers.set(tab.path, tab.content)
+    }
+    this.editorBuffers = buffers
     this.editorTabs = uniqueTabs
   }
 
@@ -1373,8 +1416,12 @@ export default struct IDEWorkbench {
             selectedProviderId: this.activeAIProviderId,
             messages: this.aiMessages,
             busy: this.aiBusy,
+            preparing: this.aiPreparing,
+            errorText: this.aiError,
             onProviderSelected: (id: string) => this.activeAIProviderId = id,
-            onSend: (prompt: string) => this.sendAIRequest(prompt)
+            onSend: (prompt: string) => this.sendAIRequest(prompt),
+            onStop: () => this.stopAIRequest(),
+            onClearConversation: () => this.clearAIConversation()
           })
             .width(this.aiPanelWidth)
         }

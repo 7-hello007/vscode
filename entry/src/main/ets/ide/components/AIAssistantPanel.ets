@@ -18,8 +18,12 @@ export default struct AIAssistantPanel {
   @Prop selectedProviderId: string = ''
   @Prop messages: IDEAIMessage[] = []
   @Prop busy: boolean = false
+  @Prop preparing: boolean = false
+  @Prop errorText: string = ''
   @Require onProviderSelected: (id: string) => void
   @Require onSend: (prompt: string) => void
+  @Require onStop: () => void
+  @Require onClearConversation: () => void
   @State prompt: string = ''
 
   private selectedProvider(): IDEAIProviderInfo | null {
@@ -86,6 +90,12 @@ export default struct AIAssistantPanel {
           .fontColor('#D7DAE0')
           .letterSpacing(0.6)
         Blank()
+        Button($r('app.string.ide_ai_clear_conversation'), { buttonStyle: ButtonStyleMode.TEXTUAL })
+          .fontSize(9)
+          .fontColor('#939CAA')
+          .height(28)
+          .enabled(this.messages.length > 0 && !this.busy)
+          .onClick(() => this.onClearConversation())
         if (this.providers.length > 0) {
           Button(this.selectedProvider()?.name || $r('app.string.ide_ai_choose_provider'),
             { buttonStyle: ButtonStyleMode.TEXTUAL })
@@ -117,8 +127,7 @@ export default struct AIAssistantPanel {
             .fontSize(10)
             .fontColor('#B7C1CE')
         }
-        Text(this.context.selectedText ? $r('app.string.ide_ai_context_selection') :
-          $r('app.string.ide_ai_context_file'))
+        Text($r('app.string.ide_ai_context_file'))
           .fontSize(9)
           .fontColor('#7E8794')
         Text((this.getUIContext().getHostContext()?.resourceManager
@@ -143,10 +152,16 @@ export default struct AIAssistantPanel {
             .textAlign(TextAlign.Center)
             .border({ width: 1, color: '#505762' })
             .borderRadius(19)
-          Text($r('app.string.ide_ai_ready_title'))
+          Text(this.errorText ? $r('app.string.ide_ai_local_error_title') :
+            this.preparing ? $r('app.string.ide_ai_preparing_model') :
+              this.selectedProvider()?.available ? $r('app.string.ide_ai_local_ready_title') :
+                $r('app.string.ide_ai_ready_title'))
             .fontSize(13)
             .fontColor('#D7DAE0')
-          Text($r('app.string.ide_ai_ready_hint'))
+          Text(this.errorText ? $r('app.string.ide_ai_local_error_hint') :
+            this.preparing ? $r('app.string.ide_ai_local_preparing_hint') :
+              this.selectedProvider()?.available ? $r('app.string.ide_ai_local_ready_hint') :
+                $r('app.string.ide_ai_ready_hint'))
             .fontSize(10)
             .fontColor('#8F98A6')
             .textAlign(TextAlign.Center)
@@ -170,12 +185,34 @@ export default struct AIAssistantPanel {
         .edgeEffect(EdgeEffect.Spring)
       }
 
+      if (this.preparing) {
+        Row({ space: 7 }) {
+          LoadingProgress()
+            .width(14)
+            .height(14)
+            .color('#AEB6C2')
+          Text($r('app.string.ide_ai_preparing_model'))
+            .fontSize(10)
+            .fontColor('#AEB6C2')
+        }
+        .width('100%')
+        .padding({ left: 10, right: 10, bottom: 6 })
+      }
+      if (this.errorText) {
+        Text(this.errorText)
+          .width('100%')
+          .padding({ left: 10, right: 10, bottom: 6 })
+          .fontSize(10)
+          .fontColor('#E08A8A')
+          .maxLines(3)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+      }
+
       Row({ space: 7 }) {
         TextInput({ text: this.prompt, placeholder: $r('app.string.ide_ai_input_placeholder') })
           .layoutWeight(1)
           .height(34)
           .fontSize(11)
-          .enabled((this.selectedProvider()?.available || false) && !this.busy)
           .backgroundColor('#20242B')
           .onChange((value: string) => this.prompt = value)
           .onSubmit(() => this.submit())
@@ -184,6 +221,13 @@ export default struct AIAssistantPanel {
           .fontSize(10)
           .enabled(!!this.prompt.trim() && (this.selectedProvider()?.available || false) && !this.busy)
           .onClick(() => this.submit())
+        if (this.busy) {
+          Button($r('app.string.ide_ai_stop'), { buttonStyle: ButtonStyleMode.TEXTUAL })
+            .height(34)
+            .fontSize(10)
+            .fontColor('#D7DAE0')
+            .onClick(() => this.onStop())
+        }
       }
       .width('100%')
       .padding({ left: 8, right: 8, bottom: 8 })

@@ -1,3 +1,6 @@
 [submodule "entry/src/main/cpp/libvncserver"]
 	path = entry/src/main/cpp/libvncserver
 	url = https://github.com/harmoninux/libvncserver.git
+[submodule "entry/src/main/cpp/third_party/llama.cpp"]
+	path = entry/src/main/cpp/third_party/llama.cpp
+	url = https://github.com/ggml-org/llama.cpp.git

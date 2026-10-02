@@ -14,6 +14,23 @@ export const sendInput: (content: ArrayBuffer) => void;
 
 export const checkPortUsed: (port: number) => boolean;
 
+// ================== Local AI Runtime (Phase A) ==================
+
+/** Stream and verify the bundled GGUF into the app sandbox. */
+export const prepareBundledModel: (resourceManager: object, filesDir: string) => Promise<string>;
+
+/** Load a GGUF model from an app-accessible absolute path. */
+export const loadModel: (path: string) => Promise<boolean>;
+
+/** Generate a complete text response on native background work. */
+export const generate: (prompt: string) => Promise<string>;
+
+/** Request cancellation of the current or next generation operation. */
+export const stop: () => void;
+
+/** Release the loaded model and llama.cpp backend resources. */
+export const unload: () => void;
+
 /**
  * 获取 QCOW2 镜像的详细信息
  * @param imagePath 镜像文件的完整路径

@@ -35,6 +35,7 @@
 #include "include/utils.hpp"
 // VNC NAPI bindings (separate module)
 #include "include/napi_vnc.hpp"
+#include "include/napi_local_inference.hpp"
 
 struct data_buffer {
     char *buf;
@@ -1206,6 +1207,9 @@ static napi_value Init(napi_env env, napi_value exports) {
 
     // Register VNC NAPI functions from napi_vnc.cpp
     registerVncFunctions(env, exports);
+
+    // Register the Phase A local inference lifecycle bridge.
+    registerLocalInferenceFunctions(env, exports);
 
     return exports;
 }
