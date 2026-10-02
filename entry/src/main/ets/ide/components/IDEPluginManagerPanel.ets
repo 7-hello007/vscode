@@ -1,4 +1,4 @@
-import { IDEPluginState } from '../plugin/IDEPluginContracts'
+import { IDEPluginCheckerStatus, IDEPluginState } from '../plugin/IDEPluginContracts'
 
 @Component
 export default struct IDEPluginManagerPanel {
@@ -31,18 +31,34 @@ export default struct IDEPluginManagerPanel {
           ForEach(this.plugins, (state: IDEPluginState) => {
             ListItem() {
               Row({ space: 10 }) {
-                Text(state.manifest.name)
-                  .fontSize(13)
-                  .fontColor('#E2E5EA')
-                  .maxLines(1)
-                  .textOverflow({ overflow: TextOverflow.Ellipsis })
+                Column({ space: 3 }) {
+                  Text(state.manifest.name)
+                    .fontSize(13)
+                    .fontColor('#E2E5EA')
+                    .maxLines(1)
+                    .textOverflow({ overflow: TextOverflow.Ellipsis })
+                  Text(state.manifest.type)
+                    .fontSize(10)
+                    .fontColor('#8D96A3')
+                    .maxLines(1)
+                  Row({ space: 12 }) {
+                    Text(state.enabled ? 'Enabled' : 'Disabled')
+                      .fontSize(10)
+                      .fontColor(state.enabled ? '#A7C080' : '#8D96A3')
+                    Text('Checker: ' + (state.checkerStatus === IDEPluginCheckerStatus.AVAILABLE ?
+                      'Available' : 'Unavailable'))
+                      .fontSize(10)
+                      .fontColor(state.checkerStatus === IDEPluginCheckerStatus.AVAILABLE ? '#A7C080' : '#D3A65A')
+                  }
+                }
                 .layoutWeight(1)
+                .alignItems(HorizontalAlign.Start)
 
                 Toggle({ type: ToggleType.Switch, isOn: state.enabled })
                   .onChange((enabled: boolean) => this.onEnabledChange(state.manifest.id, enabled))
               }
               .width('100%')
-              .padding(10)
+              .padding({ left: 10, right: 10, top: 8, bottom: 8 })
               .backgroundColor('#20242B')
               .borderRadius(6)
               .onClick(() => this.onShowInfo(state))

@@ -20,8 +20,9 @@ import {
   IDEAIProviderInfo,
   IDEAIRequest
 } from './model/IDEAIContracts'
-import { IDEPluginContext, IDEPluginState } from './plugin/IDEPluginContracts'
+import { IDEPluginCheckerStatus, IDEPluginContext, IDEPluginState } from './plugin/IDEPluginContracts'
 import IDEPluginRegistry from './plugin/IDEPluginRegistry'
+import PythonDiagnosticPlugin from './plugin/PythonDiagnosticPlugin'
 import { IDEDiagnosticResult, IDEProblem } from './problems/IDEProblemContracts'
 import IDEProblemsService from './problems/IDEProblemsService'
 import IDETerminalRunner from './run/IDETerminalRunner'
@@ -65,9 +66,9 @@ export default struct IDEWorkbench {
   private terminalRunner: IDETerminalRunner = new IDETerminalRunner()
   private aiService: IDEAIService = new IDEAIService(ideAIProviderRegistry)
   private sessionStore: IDESessionStore = new IDESessionStore()
-  private problemsService: IDEProblemsService = new IDEProblemsService(this.fileSystem)
   private pluginRegistry: IDEPluginRegistry = new IDEPluginRegistry(
     new WorkbenchPluginContext((): string => this.activeFilePath))
+  private problemsService: IDEProblemsService = new IDEProblemsService(this.fileSystem, this.pluginRegistry)
   @State editorTabs: IDEEditorTab[] = []
   @State activeFilePath: string = ''
   @State editorBusy: boolean = false
@@ -122,6 +123,7 @@ export default struct IDEWorkbench {
   private terminalReadyListener: () => void = (): void => this.onTerminalReady()
   private problemsRequestSequence: number = 0
   private sessionTimelineStartMs: number = 0
+  private pluginsInitialized: boolean = false
 
   private pluginController: CustomDialogController = new CustomDialogController({
     builder: CustomContentDialog({
@@ -159,6 +161,7 @@ export default struct IDEWorkbench {
   })
 
   aboutToAppear(): void {
+    this.initializePlugins()
     this.sessionRestoreCancelled = false
     terminalLifecycleBridge.subscribe(IDE_TERMINAL_READY_SUBSCRIBER, this.terminalReadyListener)
     if (this.compactLayout) {
@@ -174,6 +177,13 @@ export default struct IDEWorkbench {
         }
       }
     }
+  }
+
+  private initializePlugins(): void {
+    if (this.pluginsInitialized) return
+    this.pluginRegistry.register(new PythonDiagnosticPlugin(), true)
+    this.pluginsInitialized = true
+    this.pluginStates = this.pluginRegistry.list()
   }
 
   aboutToDisappear(): void {
@@ -691,6 +701,7 @@ export default struct IDEWorkbench {
 
   private applyDiagnosticResult(result: IDEDiagnosticResult): void {
     this.problems = result.problems
+    this.pluginStates = this.pluginRegistry.list()
     if (result.failureMessage) {
       this.problemsStatus = '检查失败：' + result.failureMessage
       return
@@ -870,7 +881,11 @@ export default struct IDEWorkbench {
     for (const capability of plugin.manifest.capabilities) {
       capabilities.push(capability)
     }
-    const details = plugin.manifest.version + '\n\n' + plugin.manifest.description +
+    const enabled = plugin.enabled ? 'Enabled' : 'Disabled'
+    const checker = plugin.checkerStatus === IDEPluginCheckerStatus.AVAILABLE ? 'Available' : 'Unavailable'
+    const details = plugin.manifest.type + '\n' + enabled + '\nChecker: ' + checker +
+      (plugin.checkerMessage ? '\n' + plugin.checkerMessage : '') + '\n\n' + plugin.manifest.version +
+      '\n\n' + plugin.manifest.description +
       (capabilities.length > 0 ? '\n\n' + capabilities.join(', ') : '')
     this.getUIContext().showAlertDialog({
       title: plugin.manifest.name,
@@ -889,10 +904,22 @@ export default struct IDEWorkbench {
     try {
       this.pluginRegistry.setEnabled(id, enabled)
       this.pluginStates = this.pluginRegistry.list()
+      if (enabled) void this.refreshPluginAvailability()
     } catch (error) {
       this.pluginStates = this.pluginRegistry.list()
       this.getUIContext().getPromptAction().showToast({ message: $r('app.string.ide_plugin_action_failed') })
     }
+  }
+
+  private openPluginManager(): void {
+    this.pluginStates = this.pluginRegistry.list()
+    this.pluginController.open()
+    if (!this.problemsBusy) void this.refreshPluginAvailability()
+  }
+
+  private async refreshPluginAvailability(): Promise<void> {
+    await this.problemsService.refreshPluginAvailability()
+    this.pluginStates = this.pluginRegistry.list()
   }
 
   private updateEditorSelection(selectedText: string, language: string): void {
@@ -1124,7 +1151,7 @@ export default struct IDEWorkbench {
     .margin({ left: 2, right: 2, top: 8 })
     .backgroundColor(Color.Transparent)
     .accessibilityText($r('app.string.ide_plugins_title'))
-    .onClick(() => this.pluginController.open())
+    .onClick(() => this.openPluginManager())
   }
 
   build() {
@@ -1140,7 +1167,7 @@ export default struct IDEWorkbench {
             onOpenFolder: (): void => this.openFolderDialog(),
             onCloseSavedFiles: (): void => this.closeSavedFiles(),
             onCloseAllFiles: (): void => this.requestCloseAllFiles(),
-            onPlugins: (): void => this.pluginController.open(),
+            onPlugins: (): void => this.openPluginManager(),
             onEditorCommand: (command: string): void => this.issueEditorCommand(command),
             onRun: (): void => { void this.runActiveFile() },
             onToggleFileTree: (): void => this.toggleFileTree(),
