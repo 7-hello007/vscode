@@ -3,6 +3,9 @@ import { common } from '@kit.AbilityKit'
 import IDEAIService from './ai/IDEAIService'
 import { ideAIProviderRegistry } from './ai/IDEAIProviderRegistry'
 import { HISH_LOCAL_PROVIDER_ID, localAIProvider } from './ai/LocalAIProvider'
+import { codexAgentProvider } from './agent/CodexAgentProvider'
+import HiSHAgentToolBridge from './agent/HiSHAgentToolBridge'
+import IDEAgentCommandRunner from './agent/IDEAgentCommandRunner'
 import AIWorkspacePanel from './components/AIWorkspacePanel'
 import CodeEditorPanel from './components/CodeEditorPanel'
 import FileTreePanel from './components/FileTreePanel'
@@ -66,6 +69,9 @@ export default struct IDEWorkbench {
 
   private fileSystem: IDEFileSystem = new IDEFileSystem()
   private terminalRunner: IDETerminalRunner = new IDETerminalRunner()
+  private agentCommandRunner: IDEAgentCommandRunner = new IDEAgentCommandRunner(this.terminalRunner)
+  private agentToolBridge: HiSHAgentToolBridge =
+    new HiSHAgentToolBridge(this.fileSystem, this.agentCommandRunner, '/')
   private aiService: IDEAIService = new IDEAIService(ideAIProviderRegistry)
   private sessionStore: IDESessionStore = new IDESessionStore()
   private pluginRegistry: IDEPluginRegistry = new IDEPluginRegistry(
@@ -167,6 +173,8 @@ export default struct IDEWorkbench {
   })
 
   aboutToAppear(): void {
+    codexAgentProvider.attachToolBridge(this.agentToolBridge)
+    this.agentToolBridge.setProjectRoot(this.fileTreeRootPath)
     this.initializePlugins()
     this.sessionRestoreCancelled = false
     terminalLifecycleBridge.subscribe(IDE_TERMINAL_READY_SUBSCRIBER, this.terminalReadyListener)
@@ -329,6 +337,7 @@ export default struct IDEWorkbench {
         this.editorWeight = session.editorWeight
         this.terminalWeight = session.terminalWeight
         this.fileTreeRootPath = restoredRoot
+        this.agentToolBridge.setProjectRoot(restoredRoot)
         this.fileTreeRootRevision++
       }
 
@@ -902,6 +911,7 @@ export default struct IDEWorkbench {
       await this.fileSystem.listDirectory(normalized)
       this.sessionInteractionRevision++
       this.fileTreeRootPath = normalized
+      this.agentToolBridge.setProjectRoot(normalized)
       this.fileTreeRootRevision++
       this.fileTreeVisible = true
       this.scheduleSessionSave()
@@ -1442,6 +1452,9 @@ export default struct IDEWorkbench {
             busy: this.aiBusy,
             preparing: this.aiPreparing,
             errorText: this.aiError,
+            agentProjectRoot: this.fileTreeRootPath,
+            agentActiveFilePath: this.activeFilePath,
+            agentActiveEditorBuffer: this.buildAIContext().activeFileContent,
             onProviderSelected: (id: string) => this.activeAIProviderId = id,
             onSend: (prompt: string) => this.sendAIRequest(prompt),
             onStop: () => this.stopAIRequest(),

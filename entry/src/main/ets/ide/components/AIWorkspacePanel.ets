@@ -2,6 +2,9 @@ import { IDEAIContext, IDEAIMessage, IDEAIProviderInfo } from '../model/IDEAICon
 import { LOCAL_AI_WORKSPACE_ID, webAIProviderRegistry } from '../webai/WebAIProviderRegistry'
 import AIAssistantPanel from './AIAssistantPanel'
 import AIWebPanel from './AIWebPanel'
+import CodingAgentPanel from './CodingAgentPanel'
+
+const CODEX_AGENT_WORKSPACE_ID = 'agent.codex'
 
 class AIWorkspaceMenuOption {
   value: string
@@ -24,6 +27,9 @@ export default struct AIWorkspacePanel {
   @Prop busy: boolean = false
   @Prop preparing: boolean = false
   @Prop errorText: string = ''
+  @Prop agentProjectRoot: string = '/'
+  @Prop agentActiveFilePath: string = ''
+  @Prop agentActiveEditorBuffer: string = ''
   @Require onProviderSelected: (id: string) => void
   @Require onSend: (prompt: string) => void
   @Require onStop: () => void
@@ -41,13 +47,26 @@ export default struct AIWorkspacePanel {
     return this.activeWorkspaceId === LOCAL_AI_WORKSPACE_ID
   }
 
+  private isAgent(): boolean {
+    return this.activeWorkspaceId === CODEX_AGENT_WORKSPACE_ID
+  }
+
+  private isWeb(): boolean {
+    return !this.isLocal() && !this.isAgent()
+  }
+
   private currentName(): string {
     if (this.isLocal()) return 'Local'
+    if (this.isAgent()) return 'Codex'
     return webAIProviderRegistry.find(this.activeWorkspaceId)?.name || 'Web AI'
   }
 
   private selectWorkspace(id: string): void {
     if (id === LOCAL_AI_WORKSPACE_ID) {
+      this.activeWorkspaceId = id
+      return
+    }
+    if (id === CODEX_AGENT_WORKSPACE_ID) {
       this.activeWorkspaceId = id
       return
     }
@@ -66,23 +85,25 @@ export default struct AIWorkspacePanel {
     for (const provider of webAIProviderRegistry.list()) {
       result.push(new AIWorkspaceMenuOption(provider.name, (): void => this.selectWorkspace(provider.id)))
     }
+    result.push(new AIWorkspaceMenuOption('Agent', (): void => {}, false))
+    result.push(new AIWorkspaceMenuOption('Codex', (): void => this.selectWorkspace(CODEX_AGENT_WORKSPACE_ID)))
     return result
   }
 
   private refreshWebProvider(): void {
-    if (!this.isLocal()) {
+    if (this.isWeb()) {
       this.webRefreshRequest++
     }
   }
 
   private goBackWebProvider(): void {
-    if (!this.isLocal() && this.webCanGoBack) {
+    if (this.isWeb() && this.webCanGoBack) {
       this.webBackRequest++
     }
   }
 
   private goForwardWebProvider(): void {
-    if (!this.isLocal() && this.webCanGoForward) {
+    if (this.isWeb() && this.webCanGoForward) {
       this.webForwardRequest++
     }
   }
@@ -108,7 +129,7 @@ export default struct AIWorkspacePanel {
             .height(28)
             .enabled(this.messages.length > 0 && !this.busy)
             .onClick(() => this.onClearConversation())
-        } else {
+        } else if (this.isWeb()) {
           Button({ type: ButtonType.Normal, stateEffect: true }) {
             Text('←')
               .fontSize(14)
@@ -179,6 +200,13 @@ export default struct AIWorkspacePanel {
         })
           .visibility(this.isLocal() ? Visibility.Visible : Visibility.Hidden)
 
+        CodingAgentPanel({
+          projectRoot: this.agentProjectRoot,
+          activeFilePath: this.agentActiveFilePath,
+          activeEditorBuffer: this.agentActiveEditorBuffer
+        })
+          .visibility(this.isAgent() ? Visibility.Visible : Visibility.Hidden)
+
         if (this.webStarted) {
           AIWebPanel({
             providerId: this.lastWebProviderId,
@@ -188,7 +216,7 @@ export default struct AIWorkspacePanel {
             onNavigationStateChanged: (canGoBack: boolean, canGoForward: boolean): void =>
               this.updateWebNavigationState(canGoBack, canGoForward)
           })
-            .visibility(this.isLocal() ? Visibility.Hidden : Visibility.Visible)
+            .visibility(this.isWeb() ? Visibility.Visible : Visibility.Hidden)
         }
       }
       .width('100%')
