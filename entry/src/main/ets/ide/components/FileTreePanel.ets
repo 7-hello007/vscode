@@ -1,5 +1,13 @@
 import IDEFileSystem from '../filesystem/IDEFileSystem'
 import { IDEFileEntry, IDEFileType } from '../filesystem/IDEFileSystemTypes'
+import {
+  IDE_BORDER_SUBTLE_COLOR,
+  IDE_SURFACE_COLOR,
+  IDE_SURFACE_HOVER_COLOR,
+  IDE_SURFACE_INPUT_COLOR,
+  IDE_SURFACE_RAISED_COLOR,
+  IDE_SURFACE_SELECTED_COLOR
+} from '../theme/IDEBackgroundSurfaces'
 
 enum FileTreeAction {
   NONE = 0,
@@ -29,12 +37,14 @@ export default struct FileTreePanel {
   @Watch('onRootPathChanged') @Prop rootPath: string = '/'
   @Watch('onRootRevisionChanged') @Prop rootRevision: number = 0
   @Watch('onReadyToLoadChanged') @Prop readyToLoad: boolean = false
+  @Prop selectionMode: boolean = false
   @Require onOpenFile: (path: string) => void
   @Require onEntryDeleted: (path: string) => void
   @Require onEntryRenamed: (oldPath: string, newPath: string) => void
 
   @State visibleNodes: FileNode[] = []
   @State currentDirectory: string = '/'
+  @State selectedPath: string = ''
   @State pathInput: string = '/'
   @State loading: boolean = true
   @State errorMessage: string = ''
@@ -84,6 +94,7 @@ export default struct FileTreePanel {
       size: 0
     }, 0)
     this.currentDirectory = normalizedRoot
+    this.selectedPath = normalizedRoot
     this.pathInput = normalizedRoot
     this.rootNode.expanded = true
     this.loading = true
@@ -258,6 +269,7 @@ export default struct FileTreePanel {
     if (node.loading) {
       return
     }
+    this.selectedPath = node.entry.path
     if (node.entry.type === IDEFileType.DIRECTORY) {
       this.currentDirectory = node.entry.path
       this.pathInput = node.entry.path
@@ -421,18 +433,20 @@ export default struct FileTreePanel {
     Column() {
       Row() {
         Blank()
-        Button($r('app.string.ide_new_file_short'))
-          .fontSize(11)
-          .fontColor('#D7DAE0')
-          .backgroundColor(Color.Transparent)
-          .padding({ left: 5, right: 5 })
-          .onClick(() => this.startCreateFile())
-        Button($r('app.string.ide_new_folder_short'))
-          .fontSize(11)
-          .fontColor('#D7DAE0')
-          .backgroundColor(Color.Transparent)
-          .padding({ left: 5, right: 5 })
-          .onClick(() => this.startCreateDirectory())
+        if (!this.selectionMode) {
+          Button($r('app.string.ide_new_file_short'))
+            .fontSize(11)
+            .fontColor('#D7DAE0')
+            .backgroundColor(Color.Transparent)
+            .padding({ left: 5, right: 5 })
+            .onClick(() => this.startCreateFile())
+          Button($r('app.string.ide_new_folder_short'))
+            .fontSize(11)
+            .fontColor('#D7DAE0')
+            .backgroundColor(Color.Transparent)
+            .padding({ left: 5, right: 5 })
+            .onClick(() => this.startCreateDirectory())
+        }
         Button($r('app.string.ide_refresh_short'))
           .fontSize(13)
           .fontColor('#D7DAE0')
@@ -452,7 +466,7 @@ export default struct FileTreePanel {
         Button('..')
           .fontSize(12)
           .fontColor('#D7DAE0')
-          .backgroundColor('#292D35')
+          .backgroundColor(IDE_SURFACE_HOVER_COLOR)
           .height(28)
           .padding({ left: 8, right: 8 })
           .enabled(this.currentDirectory !== this.rootNode.entry.path)
@@ -461,7 +475,9 @@ export default struct FileTreePanel {
         TextInput({ text: this.pathInput })
           .fontSize(11)
           .fontColor('#D7DAE0')
-          .backgroundColor('#101216')
+          .backgroundColor(IDE_SURFACE_INPUT_COLOR)
+          .border({ width: 1, color: IDE_BORDER_SUBTLE_COLOR })
+          .borderRadius(5)
           .height(28)
           .layoutWeight(1)
           .onChange((value: string) => {
@@ -471,6 +487,7 @@ export default struct FileTreePanel {
       }
       .width('100%')
       .padding({ left: 8, right: 8, top: 7, bottom: 7 })
+      .backgroundColor(IDE_SURFACE_RAISED_COLOR)
 
       if (this.action !== FileTreeAction.NONE) {
         Row({ space: 4 }) {
@@ -589,7 +606,7 @@ export default struct FileTreePanel {
                 .layoutWeight(1)
                 .alignItems(HorizontalAlign.Start)
 
-                if (node.entry.path !== this.rootNode.entry.path) {
+                if (!this.selectionMode && node.entry.path !== this.rootNode.entry.path) {
                   Text('⋮')
                     .fontSize(18)
                     .fontColor('#8F98A6')
@@ -609,7 +626,7 @@ export default struct FileTreePanel {
               .width('100%')
               .height(40)
               .padding({ left: 7 + node.depth * 14, right: 5 })
-              .backgroundColor(node.entry.path === this.currentDirectory ? '#222831' : Color.Transparent)
+              .backgroundColor(node.entry.path === this.selectedPath ? IDE_SURFACE_SELECTED_COLOR : Color.Transparent)
               .onClick(() => this.activateNode(node))
             }
           }, (node: FileNode): string => node.entry.path)
@@ -620,6 +637,6 @@ export default struct FileTreePanel {
     }
     .width('100%')
     .height('100%')
-    .backgroundColor('#181B20')
+    .backgroundColor(IDE_SURFACE_COLOR)
   }
 }

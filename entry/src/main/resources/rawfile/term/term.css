@@ -1,6 +1,6 @@
 body {
     margin: 0;
-    background: #000;
+    background: transparent;
     overflow: hidden;
 }
 
@@ -10,6 +10,13 @@ body {
     bottom: 0;
     left: 0;
     right: 0;
+    background: transparent;
+}
+
+.xterm,
+.xterm .xterm-viewport,
+.xterm .xterm-screen {
+    background-color: transparent !important;
 }
 
 #terminal {

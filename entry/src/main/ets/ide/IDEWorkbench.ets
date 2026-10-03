@@ -1,5 +1,7 @@
 import { CustomContentDialog } from '@kit.ArkUI'
 import { common } from '@kit.AbilityKit'
+import { fileIo as hostFs, fileUri, picker } from '@kit.CoreFileKit'
+import copyFile from '../lib/copyFile'
 import IDEAIService from './ai/IDEAIService'
 import { ideAIProviderRegistry } from './ai/IDEAIProviderRegistry'
 import { HISH_LOCAL_PROVIDER_ID, localAIProvider } from './ai/LocalAIProvider'
@@ -7,16 +9,25 @@ import { codexAgentProvider } from './agent/CodexAgentProvider'
 import HiSHAgentToolBridge from './agent/HiSHAgentToolBridge'
 import IDEAgentCommandRunner from './agent/IDEAgentCommandRunner'
 import AIWorkspacePanel from './components/AIWorkspacePanel'
+import BinaryViewerPanel from './components/BinaryViewerPanel'
+import CSVViewerPanel from './components/CSVViewerPanel'
 import CodeEditorPanel from './components/CodeEditorPanel'
+import DocumentViewerPanel from './components/DocumentViewerPanel'
 import FileTreePanel from './components/FileTreePanel'
 import IDEMenuBar from './components/IDEMenuBar'
 import IDEPluginManagerPanel from './components/IDEPluginManagerPanel'
 import IDEStatusBar from './components/IDEStatusBar'
+import MarkdownViewerPanel from './components/MarkdownViewerPanel'
+import PDFViewerPanel from './components/PDFViewerPanel'
+import PresentationViewerPanel from './components/PresentationViewerPanel'
 import ProblemsPanel from './components/ProblemsPanel'
+import SpreadsheetViewerPanel from './components/SpreadsheetViewerPanel'
 import TerminalPanel from './components/TerminalPanel'
+import IDEDocumentRuntime from './document/IDEDocumentRuntime'
 import IDEFileSystem from './filesystem/IDEFileSystem'
 import { IDEFileSystemError } from './filesystem/IDEFileSystemTypes'
-import { IDEEditorTab } from './model/IDEEditorTab'
+import BinaryEditSessionStore from './model/BinaryEditSessionStore'
+import { IDEEditorTab, IDEEditorViewerType } from './model/IDEEditorTab'
 import {
   IDEAIContext,
   IDEAIFileContext,
@@ -26,6 +37,22 @@ import {
   IDEAIRequest
 } from './model/IDEAIContracts'
 import { IDEPluginCheckerStatus, IDEPluginContext, IDEPluginState } from './plugin/IDEPluginContracts'
+import {
+  BINARY_VIEWER_PLUGIN_ID,
+  BinaryViewerPlugin,
+  CSV_VIEWER_PLUGIN_ID,
+  CSVViewerPlugin,
+  GLOBAL_BACKGROUND_PLUGIN_ID,
+  GlobalBackgroundPlugin,
+  MARKDOWN_VIEWER_PLUGIN_ID,
+  MarkdownViewerPlugin,
+  OFFICE_VIEWER_PLUGIN_ID,
+  OfficeViewerPlugin,
+  PDF_VIEWER_PLUGIN_ID,
+  PDFViewerPlugin
+} from './plugin/BuiltInViewerPlugins'
+import FileViewerRegistry, { IDEFileViewerKind, IDEFileViewerOptions } from './plugin/FileViewerRegistry'
+import PluginManager from './plugin/PluginManager'
 import IDEPluginRegistry from './plugin/IDEPluginRegistry'
 import PythonDiagnosticPlugin from './plugin/PythonDiagnosticPlugin'
 import { IDEDiagnosticResult, IDEProblem } from './problems/IDEProblemContracts'
@@ -33,6 +60,17 @@ import IDEProblemsService from './problems/IDEProblemsService'
 import IDETerminalRunner from './run/IDETerminalRunner'
 import IDESessionStore, { IDESessionState } from './session/IDESessionStore'
 import { terminalLifecycleBridge } from '../lib/TerminalLifecycleBridge'
+import IDEWebUploadFileAdapter from './webai/IDEWebUploadFileAdapter'
+import {
+  IDE_BORDER_SUBTLE_COLOR,
+  IDE_SPLITTER_COLOR,
+  IDE_SURFACE_COLOR,
+  IDE_SURFACE_DARK_COLOR,
+  IDE_SURFACE_HOVER_COLOR,
+  IDE_SURFACE_POPUP_COLOR,
+  IDE_SURFACE_RAISED_COLOR,
+  IDE_SURFACE_SELECTED_COLOR
+} from './theme/IDEBackgroundSurfaces'
 
 const IDE_TERMINAL_READY_SUBSCRIBER = 'IDE.Workbench.SessionRestore'
 const IDE_SESSION_MAX_PROBE_ATTEMPTS = 8
@@ -76,6 +114,10 @@ export default struct IDEWorkbench {
   private sessionStore: IDESessionStore = new IDESessionStore()
   private pluginRegistry: IDEPluginRegistry = new IDEPluginRegistry(
     new WorkbenchPluginContext((): string => this.activeFilePath))
+  private pluginManager: PluginManager = new PluginManager(this.pluginRegistry)
+  private fileViewerRegistry: FileViewerRegistry = new FileViewerRegistry()
+  private documentRuntime: IDEDocumentRuntime = new IDEDocumentRuntime(this.fileSystem)
+  private binaryEditStore: BinaryEditSessionStore = new BinaryEditSessionStore()
   private problemsService: IDEProblemsService = new IDEProblemsService(this.fileSystem, this.pluginRegistry)
   @State editorTabs: IDEEditorTab[] = []
   @State activeFilePath: string = ''
@@ -94,6 +136,15 @@ export default struct IDEWorkbench {
   @State editorCommandRequest: string = ''
   @State editorCommandSequence: number = 0
   @State pluginStates: IDEPluginState[] = this.pluginRegistry.list()
+  @State pluginsVisible: boolean = false
+  @State activeViewerKind: IDEFileViewerKind = IDEFileViewerKind.TEXT
+  @State activeViewerType: string = 'Text'
+  @State markdownPreview: boolean = true
+  @State csvTextPaths: string[] = []
+  @State backgroundImagePath: string = ''
+  @State backgroundImageUri: string = ''
+  @State backgroundOpacity: number = 50
+  @State binaryRevision: number = 0
   @State aiProviders: IDEAIProviderInfo[] = ideAIProviderRegistry.list()
   @State activeAIProviderId: string = ''
   @State aiMessages: IDEAIMessage[] = []
@@ -136,6 +187,10 @@ export default struct IDEWorkbench {
   private problemsRequestSequence: number = 0
   private sessionTimelineStartMs: number = 0
   private pluginsInitialized: boolean = false
+  private webUploadAdapter: IDEWebUploadFileAdapter | null = null
+  private pendingWebUploadSelection: ((files: string[]) => void) | null = null
+  @State webUploadBusy: boolean = false
+  @State webUploadError: string = ''
 
   private pluginController: CustomDialogController = new CustomDialogController({
     builder: CustomContentDialog({
@@ -147,6 +202,20 @@ export default struct IDEWorkbench {
         value: $r('app.string.SettingComplete_label'),
         buttonStyle: ButtonStyleMode.TEXTUAL,
         action: (): void => this.pluginController.close()
+      }]
+    })
+  })
+
+  private backgroundSettingsController: CustomDialogController = new CustomDialogController({
+    builder: CustomContentDialog({
+      primaryTitle: '全局背景',
+      contentBuilder: () => {
+        this.buildGlobalBackgroundSettings()
+      },
+      buttons: [{
+        value: $r('app.string.SettingComplete_label'),
+        buttonStyle: ButtonStyleMode.TEXTUAL,
+        action: (): void => this.backgroundSettingsController.close()
       }]
     })
   })
@@ -172,10 +241,26 @@ export default struct IDEWorkbench {
     })
   })
 
+  private webUploadFileController: CustomDialogController = new CustomDialogController({
+    builder: CustomContentDialog({
+      primaryTitle: 'Choose HiSH File',
+      contentBuilder: () => {
+        this.buildHiSHUploadFileChooser()
+      },
+      buttons: [{
+        value: $r('app.string.setting_generic_cancel'),
+        buttonStyle: ButtonStyleMode.TEXTUAL,
+        action: (): void => this.completeHiSHUploadSelection([])
+      }]
+    }),
+    autoCancel: false
+  })
+
   aboutToAppear(): void {
     codexAgentProvider.attachToolBridge(this.agentToolBridge)
     this.agentToolBridge.setProjectRoot(this.fileTreeRootPath)
     const abilityContext = this.getUIContext().getHostContext() as common.UIAbilityContext
+    if (abilityContext) this.documentRuntime.setContext(abilityContext)
     if (abilityContext) void codexAgentProvider.initialize(abilityContext)
     this.initializePlugins()
     this.sessionRestoreCancelled = false
@@ -212,9 +297,30 @@ export default struct IDEWorkbench {
 
   private initializePlugins(): void {
     if (this.pluginsInitialized) return
-    this.pluginRegistry.register(new PythonDiagnosticPlugin(), true)
+    this.pluginManager.register(new PythonDiagnosticPlugin(), true)
+    this.pluginManager.register(new BinaryViewerPlugin(), true)
+    this.pluginManager.register(new MarkdownViewerPlugin(), true)
+    this.pluginManager.register(new GlobalBackgroundPlugin(), false)
+    this.pluginManager.register(new PDFViewerPlugin(), true)
+    this.pluginManager.register(new OfficeViewerPlugin(), true)
+    this.pluginManager.register(new CSVViewerPlugin(), true)
     this.pluginsInitialized = true
-    this.pluginStates = this.pluginRegistry.list()
+    this.pluginStates = this.pluginManager.getPlugins()
+    void this.restorePluginState()
+  }
+
+  private async restorePluginState(): Promise<void> {
+    const persisted = await this.pluginManager.restore(this.getUIContext())
+    this.pluginStates = this.pluginManager.getPlugins()
+    this.backgroundOpacity = persisted.backgroundOpacity
+    if (persisted.backgroundImagePath && hostFs.accessSync(persisted.backgroundImagePath, hostFs.AccessModeType.EXIST)) {
+      this.backgroundImagePath = persisted.backgroundImagePath
+      this.backgroundImageUri = fileUri.getUriFromPath(persisted.backgroundImagePath)
+    } else {
+      this.backgroundImagePath = ''
+      this.backgroundImageUri = ''
+    }
+    this.reconcileActiveViewer()
   }
 
   aboutToDisappear(): void {
@@ -232,6 +338,9 @@ export default struct IDEWorkbench {
     if (this.sessionRestored && !this.sessionRestoring) {
       void this.persistSession()
     }
+    if (this.pendingWebUploadSelection) this.completeHiSHUploadSelection([])
+    if (this.webUploadAdapter) void this.webUploadAdapter.cleanup()
+    this.documentRuntime.releaseAll()
   }
 
   private onTerminalReady(): void {
@@ -358,6 +467,7 @@ export default struct IDEWorkbench {
         } else if (this.editorTabs.length > 0) {
           this.activeFilePath = this.editorTabs[0].path
         }
+        if (this.activeFilePath) this.activateViewerForTextPath(this.activeFilePath)
       }
       console.info('IDE session timeline: tabs restored=' + this.editorTabs.length +
         ', active=' + (this.activeFilePath || '<none>') + ', restore duration=' +
@@ -416,6 +526,7 @@ export default struct IDEWorkbench {
     if (this.findTab(path)) {
       if (activate) {
         this.activeFilePath = path
+        this.activateViewerForTextPath(path)
       }
       this.editorStatus = ''
       this.scheduleSessionSave()
@@ -436,14 +547,52 @@ export default struct IDEWorkbench {
     this.editorStatus = ''
     let opened = false
     try {
+      const sample = await this.fileSystem.readBinary(path, 0, 512)
+      const viewerOptions = new IDEFileViewerOptions()
+      viewerOptions.markdownEnabled = this.pluginManager.isEnabled(MARKDOWN_VIEWER_PLUGIN_ID)
+      viewerOptions.pdfEnabled = this.pluginManager.isEnabled(PDF_VIEWER_PLUGIN_ID)
+      viewerOptions.officeEnabled = this.pluginManager.isEnabled(OFFICE_VIEWER_PLUGIN_ID)
+      viewerOptions.csvEnabled = this.pluginManager.isEnabled(CSV_VIEWER_PLUGIN_ID)
+      const resolution = this.fileViewerRegistry.resolve(path, sample, viewerOptions)
+      if (resolution.kind === IDEFileViewerKind.BINARY || resolution.kind === IDEFileViewerKind.PDF ||
+        resolution.kind === IDEFileViewerKind.DOCUMENT || resolution.kind === IDEFileViewerKind.SPREADSHEET ||
+        resolution.kind === IDEFileViewerKind.PRESENTATION) {
+        if (!this.pluginManager.isEnabled(BINARY_VIEWER_PLUGIN_ID)) {
+          if (resolution.kind === IDEFileViewerKind.BINARY) throw new Error('Binary Viewer plugin is disabled')
+        }
+        if (!this.findTab(path)) {
+          const newTabs = this.editorTabs.slice()
+          let viewerType = IDEEditorViewerType.BINARY
+          if (resolution.kind === IDEFileViewerKind.PDF) viewerType = IDEEditorViewerType.PDF
+          else if (resolution.kind === IDEFileViewerKind.DOCUMENT) viewerType = IDEEditorViewerType.DOCUMENT
+          else if (resolution.kind === IDEFileViewerKind.SPREADSHEET) viewerType = IDEEditorViewerType.SPREADSHEET
+          else if (resolution.kind === IDEFileViewerKind.PRESENTATION) viewerType = IDEEditorViewerType.PRESENTATION
+          newTabs.push(new IDEEditorTab(path, '', false, viewerType, true, resolution.detectedType))
+          this.replaceEditorTabs(newTabs)
+        }
+        if (activate || this.pendingFileActivations.indexOf(path) !== -1) {
+          this.activeFilePath = path
+          this.activeViewerKind = resolution.kind
+          this.activeViewerType = resolution.detectedType
+        }
+        opened = true
+        this.scheduleSessionSave()
+        return opened
+      }
       const content = await this.fileSystem.readFile(path)
       if (!this.findTab(path)) {
         const newTabs = this.editorTabs.slice()
-        newTabs.push(new IDEEditorTab(path, content))
+        const viewerType = resolution.kind === IDEFileViewerKind.MARKDOWN ?
+          IDEEditorViewerType.MARKDOWN : (resolution.kind === IDEFileViewerKind.CSV ?
+            IDEEditorViewerType.CSV : IDEEditorViewerType.TEXT)
+        newTabs.push(new IDEEditorTab(path, content, false, viewerType, true, resolution.detectedType))
         this.replaceEditorTabs(newTabs)
       }
       if (activate || this.pendingFileActivations.indexOf(path) !== -1) {
         this.activeFilePath = path
+        this.activeViewerKind = resolution.kind
+        this.activeViewerType = resolution.detectedType
+        this.markdownPreview = resolution.kind === IDEFileViewerKind.MARKDOWN
       }
       opened = true
       this.scheduleSessionSave()
@@ -458,6 +607,59 @@ export default struct IDEWorkbench {
       this.editorBusy = this.openingFilePaths.length > 0
     }
     return opened
+  }
+
+  private activateViewerForTextPath(path: string): void {
+    const tab = this.findTab(path)
+    if (!tab) return
+    this.activeViewerType = tab.detectedType
+    if (tab?.viewerType === IDEEditorViewerType.BINARY) {
+      this.activeViewerKind = IDEFileViewerKind.BINARY
+      return
+    }
+    if (tab.viewerType === IDEEditorViewerType.PDF) {
+      this.activeViewerKind = this.pluginManager.isEnabled(PDF_VIEWER_PLUGIN_ID) ?
+        IDEFileViewerKind.PDF : IDEFileViewerKind.BINARY
+      return
+    }
+    if (tab.viewerType === IDEEditorViewerType.DOCUMENT) {
+      this.activeViewerKind = this.pluginManager.isEnabled(OFFICE_VIEWER_PLUGIN_ID) ?
+        IDEFileViewerKind.DOCUMENT : IDEFileViewerKind.BINARY
+      return
+    }
+    if (tab.viewerType === IDEEditorViewerType.SPREADSHEET) {
+      this.activeViewerKind = this.pluginManager.isEnabled(OFFICE_VIEWER_PLUGIN_ID) ?
+        IDEFileViewerKind.SPREADSHEET : IDEFileViewerKind.BINARY
+      return
+    }
+    if (tab.viewerType === IDEEditorViewerType.PRESENTATION) {
+      this.activeViewerKind = this.pluginManager.isEnabled(OFFICE_VIEWER_PLUGIN_ID) ?
+        IDEFileViewerKind.PRESENTATION : IDEFileViewerKind.BINARY
+      return
+    }
+    if (tab.viewerType === IDEEditorViewerType.CSV) {
+      this.activeViewerKind = this.pluginManager.isEnabled(CSV_VIEWER_PLUGIN_ID) ?
+        IDEFileViewerKind.CSV : IDEFileViewerKind.TEXT
+      return
+    }
+    if (tab?.viewerType === IDEEditorViewerType.MARKDOWN) {
+      this.activeViewerKind = this.pluginManager.isEnabled(MARKDOWN_VIEWER_PLUGIN_ID) ?
+        IDEFileViewerKind.MARKDOWN : IDEFileViewerKind.TEXT
+      this.markdownPreview = this.activeViewerKind === IDEFileViewerKind.MARKDOWN
+      return
+    }
+    const lower = path.toLowerCase()
+    const markdown = (lower.endsWith('.md') || lower.endsWith('.markdown')) &&
+      this.pluginManager.isEnabled(MARKDOWN_VIEWER_PLUGIN_ID)
+    this.activeViewerKind = markdown ? IDEFileViewerKind.MARKDOWN : IDEFileViewerKind.TEXT
+    this.activeViewerType = markdown ? 'Markdown' : tab.detectedType
+    this.markdownPreview = markdown
+  }
+
+  private reconcileActiveViewer(): void {
+    if (this.activeFilePath && this.findTab(this.activeFilePath)) {
+      this.activateViewerForTextPath(this.activeFilePath)
+    }
   }
 
   private isOpeningFile(path: string): boolean {
@@ -488,9 +690,14 @@ export default struct IDEWorkbench {
     this.sessionInteractionRevision++
     const activeTab = this.findTab(this.activeFilePath)
     if (activeTab?.dirty) {
-      void this.saveFile(activeTab.path, activeTab.content)
+      if (activeTab.viewerType === IDEEditorViewerType.BINARY) {
+        void this.saveBinaryFile(activeTab.path)
+      } else {
+        void this.saveFile(activeTab.path, activeTab.content)
+      }
     }
     this.activeFilePath = path
+    this.activateViewerForTextPath(path)
     this.editorStatus = ''
     this.scheduleSessionSave()
   }
@@ -517,9 +724,14 @@ export default struct IDEWorkbench {
         },
         {
           enabled: true,
-          style: DialogButtonStyle.HIGHLIGHT,
           value: $r('app.string.ide_discard'),
           action: () => this.closeTab(path)
+        },
+        {
+          enabled: true,
+          style: DialogButtonStyle.HIGHLIGHT,
+          value: $r('app.string.ide_save_and_close'),
+          action: () => { void this.saveTabAndClose(path) }
         }
       ]
     })
@@ -538,12 +750,18 @@ export default struct IDEWorkbench {
       }
     }
     this.replaceEditorTabs(remaining)
+    this.csvTextPaths = this.csvTextPaths.filter((value: string): boolean =>
+      value !== path && !value.startsWith(path + '/'))
+    this.binaryEditStore.clear(path)
+    this.documentRuntime.release(path)
     if (this.activeFilePath === path) {
       if (remaining.length === 0) {
         this.activeFilePath = ''
+        this.activeViewerKind = IDEFileViewerKind.TEXT
       } else {
         const nextIndex = Math.min(oldIndex, remaining.length - 1)
         this.activeFilePath = remaining[nextIndex].path
+        this.activateViewerForTextPath(this.activeFilePath)
       }
     }
     this.editorStatus = ''
@@ -615,7 +833,9 @@ export default struct IDEWorkbench {
         if (!tab) {
           continue
         }
-        if (!tab.dirty || await this.saveFile(tab.path, tab.content, false)) {
+        const saved = !tab.dirty || (tab.viewerType === IDEEditorViewerType.BINARY ?
+          await this.saveBinaryFile(tab.path, false) : await this.saveFile(tab.path, tab.content, false))
+        if (saved) {
           this.closeTab(path)
         }
       }
@@ -628,7 +848,8 @@ export default struct IDEWorkbench {
   private updateEditorContent(path: string, content: string): void {
     const updated: IDEEditorTab[] = []
     for (const tab of this.editorTabs) {
-      updated.push(tab.path === path ? new IDEEditorTab(tab.path, content, true) : tab)
+      updated.push(tab.path === path ?
+        new IDEEditorTab(tab.path, content, true, tab.viewerType, tab.closable, tab.detectedType) : tab)
     }
     this.replaceEditorTabs(updated)
     this.editorStatus = ''
@@ -659,7 +880,8 @@ export default struct IDEWorkbench {
       let savedCurrentContent: boolean = false
       for (const currentTab of this.editorTabs) {
         if (currentTab.path === path && currentTab.content === content) {
-          updated.push(new IDEEditorTab(currentTab.path, currentTab.content, false))
+          updated.push(new IDEEditorTab(currentTab.path, currentTab.content, false,
+            currentTab.viewerType, currentTab.closable, currentTab.detectedType))
           savedCurrentContent = true
         } else {
           updated.push(currentTab)
@@ -682,9 +904,59 @@ export default struct IDEWorkbench {
     }
   }
 
+  private markBinaryDirty(path: string, dirty: boolean): void {
+    const updated: IDEEditorTab[] = []
+    for (const tab of this.editorTabs) {
+      updated.push(tab.path === path ? new IDEEditorTab(tab.path, tab.content, dirty,
+        tab.viewerType, tab.closable, tab.detectedType) : tab)
+    }
+    this.replaceEditorTabs(updated)
+    this.editorStatus = ''
+  }
+
+  private async saveBinaryFile(path: string, manageBusy: boolean = true): Promise<boolean> {
+    const tab = this.findTab(path)
+    if (!tab || tab.viewerType !== IDEEditorViewerType.BINARY) return false
+    if (!tab.dirty) return true
+    if (this.editorBusy && manageBusy) return false
+    if (manageBusy) this.editorBusy = true
+    this.editorStatus = ''
+    try {
+      const patches = this.binaryEditStore.buildPatches(path)
+      for (const patch of patches) {
+        await this.fileSystem.writeBinary(path, patch.offset, patch.bytes)
+      }
+      this.binaryEditStore.clear(path)
+      this.markBinaryDirty(path, false)
+      this.binaryRevision++
+      this.editorStatus = this.getUIContext().getHostContext()?.resourceManager
+        .getStringByNameSync('ide_saved') || 'Saved'
+      return true
+    } catch (error) {
+      this.editorStatus = (error as Error).message
+      this.getUIContext().getPromptAction().showToast({ message: $r('app.string.ide_save_failed') })
+      return false
+    } finally {
+      if (manageBusy) this.editorBusy = false
+    }
+  }
+
+  private async saveTabAndClose(path: string): Promise<void> {
+    const tab = this.findTab(path)
+    if (!tab) return
+    const saved = tab.viewerType === IDEEditorViewerType.BINARY ?
+      await this.saveBinaryFile(path) : await this.saveFile(path, tab.content)
+    if (saved) this.closeTab(path)
+  }
+
   private async runActiveFile(): Promise<void> {
     const tab = this.findTab(this.activeFilePath)
     if (!tab || this.editorBusy || this.runBusy) {
+      return
+    }
+
+    if (tab.viewerType !== IDEEditorViewerType.TEXT && tab.viewerType !== IDEEditorViewerType.MARKDOWN) {
+      this.getUIContext().getPromptAction().showToast({ message: $r('app.string.ide_run_unsupported') })
       return
     }
 
@@ -702,7 +974,8 @@ export default struct IDEWorkbench {
         const updated: IDEEditorTab[] = []
         for (const currentTab of this.editorTabs) {
           updated.push(currentTab.path === tab.path ?
-            new IDEEditorTab(currentTab.path, currentTab.content, false) : currentTab)
+            new IDEEditorTab(currentTab.path, currentTab.content, false,
+              currentTab.viewerType, currentTab.closable, currentTab.detectedType) : currentTab)
         }
         this.replaceEditorTabs(updated)
       }
@@ -722,7 +995,11 @@ export default struct IDEWorkbench {
   private saveActiveFile(): void {
     const tab = this.findTab(this.activeFilePath)
     if (tab?.dirty) {
-      void this.saveFile(tab.path, tab.content)
+      if (tab.viewerType === IDEEditorViewerType.BINARY) {
+        void this.saveBinaryFile(tab.path)
+      } else {
+        void this.saveFile(tab.path, tab.content)
+      }
     }
   }
 
@@ -826,6 +1103,12 @@ export default struct IDEWorkbench {
 
   private toggleFileTree(): void {
     this.sessionInteractionRevision++
+    if (this.pluginsVisible) {
+      this.pluginsVisible = false
+      this.fileTreeVisible = true
+      this.scheduleSessionSave()
+      return
+    }
     this.fileTreeVisible = !this.fileTreeVisible
     this.scheduleSessionSave()
   }
@@ -931,13 +1214,17 @@ export default struct IDEWorkbench {
   }
 
   private showPluginInfo(plugin: IDEPluginState): void {
+    if (plugin.manifest.id === GLOBAL_BACKGROUND_PLUGIN_ID) {
+      this.backgroundSettingsController.open()
+      return
+    }
     const capabilities: string[] = []
     for (const capability of plugin.manifest.capabilities) {
       capabilities.push(capability)
     }
-    const enabled = plugin.enabled ? 'Enabled' : 'Disabled'
-    const checker = plugin.checkerStatus === IDEPluginCheckerStatus.AVAILABLE ? 'Available' : 'Unavailable'
-    const details = plugin.manifest.type + '\n' + enabled + '\nChecker: ' + checker +
+    const enabled = plugin.enabled ? '已启用' : '已禁用'
+    const checker = plugin.checkerStatus === IDEPluginCheckerStatus.AVAILABLE ? '可用' : '不可用'
+    const details = plugin.manifest.type + '\n' + enabled + '\n检查器：' + checker +
       (plugin.checkerMessage ? '\n' + plugin.checkerMessage : '') + '\n\n' + plugin.manifest.version +
       '\n\n' + plugin.manifest.description +
       (capabilities.length > 0 ? '\n\n' + capabilities.join(', ') : '')
@@ -956,24 +1243,85 @@ export default struct IDEWorkbench {
 
   private setPluginEnabled(id: string, enabled: boolean): void {
     try {
-      this.pluginRegistry.setEnabled(id, enabled)
-      this.pluginStates = this.pluginRegistry.list()
+      const changed = this.pluginManager.setEnabled(id, enabled, this.getUIContext())
+      if (!changed) throw new Error('Plugin lifecycle failed')
+      this.pluginStates = this.pluginManager.getPlugins()
+      this.reconcileActiveViewer()
       if (enabled) void this.refreshPluginAvailability()
     } catch (error) {
-      this.pluginStates = this.pluginRegistry.list()
+      this.pluginStates = this.pluginManager.getPlugins()
       this.getUIContext().getPromptAction().showToast({ message: $r('app.string.ide_plugin_action_failed') })
     }
   }
 
   private openPluginManager(): void {
-    this.pluginStates = this.pluginRegistry.list()
-    this.pluginController.open()
+    this.pluginStates = this.pluginManager.getPlugins()
+    this.pluginsVisible = !this.pluginsVisible
+    this.fileTreeVisible = true
     if (!this.problemsBusy) void this.refreshPluginAvailability()
   }
 
   private async refreshPluginAvailability(): Promise<void> {
     await this.problemsService.refreshPluginAvailability()
-    this.pluginStates = this.pluginRegistry.list()
+    this.pluginStates = this.pluginManager.getPlugins()
+  }
+
+  private backgroundVisible(): boolean {
+    for (const state of this.pluginStates) {
+      if (state.manifest.id === GLOBAL_BACKGROUND_PLUGIN_ID) {
+        return state.enabled && !!this.backgroundImageUri
+      }
+    }
+    return false
+  }
+
+  private platformPluginStates(): IDEPluginState[] {
+    const states: IDEPluginState[] = []
+    for (const state of this.pluginStates) {
+      if (state.manifest.id === BINARY_VIEWER_PLUGIN_ID || state.manifest.id === MARKDOWN_VIEWER_PLUGIN_ID ||
+        state.manifest.id === GLOBAL_BACKGROUND_PLUGIN_ID || state.manifest.id === PDF_VIEWER_PLUGIN_ID ||
+        state.manifest.id === OFFICE_VIEWER_PLUGIN_ID || state.manifest.id === CSV_VIEWER_PLUGIN_ID) {
+        states.push(state)
+      }
+    }
+    return states
+  }
+
+  private async chooseBackgroundImage(): Promise<void> {
+    try {
+      const context = this.getUIContext().getHostContext() as common.UIAbilityContext
+      const options = new picker.DocumentSelectOptions()
+      options.fileSuffixFilters = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp']
+      options.maxSelectNumber = 1
+      const uris = await new picker.DocumentViewPicker(context).select(options)
+      if (uris.length === 0) return
+      const cleanUri = uris[0].split('?')[0]
+      const dot = cleanUri.lastIndexOf('.')
+      let extension = dot === -1 ? '.image' : cleanUri.substring(dot).toLowerCase()
+      if (extension.length > 8 || extension.indexOf('/') !== -1) extension = '.image'
+      const applicationContext = context.getApplicationContext()
+      const target = applicationContext.filesDir + '/hish-global-background-' + Date.now() + extension
+      const temporary = target + '.tmp'
+      if (hostFs.accessSync(temporary, hostFs.AccessModeType.EXIST)) await hostFs.unlink(temporary)
+      await copyFile(uris[0], temporary)
+      const copied = await hostFs.stat(temporary)
+      if (copied.size <= 0) throw new Error('Selected image is empty')
+      await hostFs.rename(temporary, target)
+      const previous = this.backgroundImagePath
+      this.backgroundImagePath = target
+      this.backgroundImageUri = fileUri.getUriFromPath(target)
+      this.pluginManager.updateBackground(this.getUIContext(), target, this.backgroundOpacity)
+      if (previous && previous !== target && hostFs.accessSync(previous, hostFs.AccessModeType.EXIST)) {
+        try { await hostFs.unlink(previous) } catch (error) {}
+      }
+    } catch (error) {
+      this.getUIContext().getPromptAction().showToast({ message: 'Unable to use the selected background image' })
+    }
+  }
+
+  private updateBackgroundOpacity(value: number): void {
+    this.backgroundOpacity = Math.max(0, Math.min(100, Math.round(value)))
+    this.pluginManager.updateBackground(this.getUIContext(), this.backgroundImagePath, this.backgroundOpacity)
   }
 
   private updateEditorSelection(selectedText: string, language: string): void {
@@ -1079,13 +1427,326 @@ export default struct IDEWorkbench {
     this.aiMessages = []
   }
 
+  private chooseHiSHUploadFiles(): Promise<string[]> {
+    if (!this.fileSystemReady) {
+      this.getUIContext().getPromptAction().showToast({ message: 'HiSH file service is not ready' })
+      return Promise.resolve([])
+    }
+    if (this.pendingWebUploadSelection) {
+      this.completeHiSHUploadSelection([])
+    }
+    this.webUploadBusy = false
+    this.webUploadError = ''
+    return new Promise<string[]>((resolve: (files: string[]) => void): void => {
+      this.pendingWebUploadSelection = resolve
+      this.webUploadFileController.open()
+    })
+  }
+
+  private completeHiSHUploadSelection(files: string[]): void {
+    const completion = this.pendingWebUploadSelection
+    this.pendingWebUploadSelection = null
+    this.webUploadBusy = false
+    this.webUploadFileController.close()
+    if (completion) completion(files)
+  }
+
+  private async selectHiSHUploadFile(path: string): Promise<void> {
+    if (this.webUploadBusy || !this.pendingWebUploadSelection) return
+    this.webUploadBusy = true
+    this.webUploadError = ''
+    try {
+      const context = this.getUIContext().getHostContext() as common.UIAbilityContext
+      if (!this.webUploadAdapter) {
+        this.webUploadAdapter = new IDEWebUploadFileAdapter(this.fileSystem, context)
+      }
+      const uri = await this.webUploadAdapter.stageHiSHFile(path)
+      this.completeHiSHUploadSelection([uri])
+    } catch (error) {
+      this.webUploadError = (error as Error).message || 'Unable to prepare the selected file'
+      this.webUploadBusy = false
+    }
+  }
+
   @Builder
   private buildPluginManager() {
     IDEPluginManagerPanel({
-      plugins: this.pluginStates,
+      plugins: this.platformPluginStates(),
       onEnabledChange: (id: string, enabled: boolean) => this.setPluginEnabled(id, enabled),
       onShowInfo: (plugin: IDEPluginState) => this.showPluginInfo(plugin)
     })
+  }
+
+  @Builder
+  private buildGlobalBackgroundSettings() {
+    Column({ space: 14 }) {
+      Row({ space: 10 }) {
+        Column({ space: 3 }) {
+          Text('背景图片')
+            .fontSize(12)
+            .fontColor('#D7DAE0')
+          Text(this.backgroundImagePath ? '已选择图片' : '未选择图片')
+            .fontSize(10)
+            .fontColor('#8D96A3')
+        }
+        .layoutWeight(1)
+        .alignItems(HorizontalAlign.Start)
+        Button('选择图片')
+          .height(30)
+          .fontSize(11)
+          .backgroundColor(IDE_SURFACE_HOVER_COLOR)
+          .onClick(() => { void this.chooseBackgroundImage() })
+      }
+      .width('100%')
+
+      Row({ space: 8 }) {
+        Text('透明度')
+          .fontSize(11)
+          .fontColor('#AAB2BD')
+          .width(52)
+        Slider({ value: this.backgroundOpacity, min: 0, max: 100, step: 1 })
+          .layoutWeight(1)
+          .onChange((value: number) => this.updateBackgroundOpacity(value))
+        Text(Math.round(this.backgroundOpacity) + '%')
+          .fontSize(10)
+          .fontColor('#AAB2BD')
+          .width(36)
+      }
+      .width('100%')
+    }
+    .width('100%')
+    .padding(12)
+    .backgroundColor(IDE_SURFACE_POPUP_COLOR)
+    .border({ width: 1, color: IDE_BORDER_SUBTLE_COLOR })
+    .borderRadius(6)
+  }
+
+  @Builder
+  private buildHiSHUploadFileChooser() {
+    Column({ space: 6 }) {
+      if (this.webUploadError) {
+        Text(this.webUploadError)
+          .width('100%')
+          .fontSize(10)
+          .fontColor('#E5A5A5')
+          .maxLines(2)
+      }
+      if (this.webUploadBusy) {
+        Row({ space: 8 }) {
+          LoadingProgress().width(18).height(18).color('#8F98A6')
+          Text('Preparing file for upload…')
+            .fontSize(10)
+            .fontColor('#AAB2BD')
+        }
+        .width('100%')
+      }
+      FileTreePanel({
+        fileSystem: this.fileSystem,
+        rootPath: this.fileTreeRootPath,
+        rootRevision: this.fileTreeRootRevision,
+        readyToLoad: this.fileSystemReady,
+        selectionMode: true,
+        onOpenFile: (path: string): void => { void this.selectHiSHUploadFile(path) },
+        onEntryDeleted: (_path: string): void => {},
+        onEntryRenamed: (_oldPath: string, _newPath: string): void => {}
+      })
+        .width('100%')
+        .height(420)
+    }
+    .width('100%')
+    .padding({ top: 4, bottom: 4 })
+  }
+
+  @Builder
+  private buildEditorTabBar() {
+    Row() {
+      List({ space: 1 }) {
+        ForEach(this.editorTabs, (tab: IDEEditorTab) => {
+          ListItem() {
+            Row({ space: 7 }) {
+              SymbolGlyph($r('sys.symbol.doc_text'))
+                .fontSize(13)
+                .fontColor([tab.path === this.activeFilePath ? '#C5CCD6' : '#7E8794'])
+              Text(tab.name + (tab.dirty ? ' ●' : ''))
+                .fontSize(11)
+                .fontColor(tab.path === this.activeFilePath ? '#E2E5EA' : '#939CAA')
+                .maxLines(1)
+                .textOverflow({ overflow: TextOverflow.Ellipsis })
+              if (tab.closable) {
+                Text('×')
+                  .fontSize(15)
+                  .fontColor('#8F98A6')
+                  .padding({ left: 3, right: 3 })
+                  .onClick(() => this.requestCloseTab(tab.path))
+              }
+            }
+            .height(34)
+            .padding({ left: 10, right: 6 })
+            .backgroundColor(tab.path === this.activeFilePath ? IDE_SURFACE_SELECTED_COLOR : IDE_SURFACE_DARK_COLOR)
+            .border({
+              width: { bottom: tab.path === this.activeFilePath ? 2 : 0 },
+              color: '#7AA2F7'
+            })
+            .onClick(() => this.selectTab(tab.path))
+          }
+        }, (tab: IDEEditorTab): string => tab.path + ':' + (tab.dirty ? 'dirty' : 'saved') + ':' + tab.viewerType)
+      }
+      .listDirection(Axis.Horizontal)
+      .layoutWeight(1)
+      .height(34)
+    }
+    .width('100%')
+    .height(35)
+    .backgroundColor(IDE_SURFACE_DARK_COLOR)
+  }
+
+  @Builder
+  private buildCodeEditor() {
+    CodeEditorPanel({
+      tabs: this.editorTabs,
+      activeFilePath: this.activeFilePath,
+      busy: this.editorBusy,
+      statusMessage: this.editorStatus,
+      commandRequest: this.editorCommandRequest,
+      tabBarVisible: false,
+      onTabSelected: (path: string) => this.selectTab(path),
+      onTabClose: (path: string) => this.requestCloseTab(path),
+      onContentChange: (path: string, content: string) => this.updateEditorContent(path, content),
+      onSave: (path: string, content: string) => this.saveFile(path, content),
+      onRun: () => this.runActiveFile(),
+      onSelectionChange: (selectedText: string, language: string) =>
+        this.updateEditorSelection(selectedText, language),
+      onStatusChange: (line: number, column: number, encoding: string, lineEnding: string) =>
+        this.updateEditorStatus(line, column, encoding, lineEnding)
+    })
+  }
+
+  @Builder
+  private buildEditorViewer() {
+    Column() {
+      this.buildEditorTabBar()
+      if (this.activeViewerKind === IDEFileViewerKind.BINARY && this.activeFilePath) {
+        if (this.pluginManager.isEnabled(BINARY_VIEWER_PLUGIN_ID)) {
+          BinaryViewerPanel({
+            fileSystem: this.fileSystem,
+            editStore: this.binaryEditStore,
+            path: this.activeFilePath,
+            detectedType: this.activeViewerType,
+            revision: this.binaryRevision,
+            onDirtyChange: (path: string, dirty: boolean) => this.markBinaryDirty(path, dirty)
+          })
+            .layoutWeight(1)
+        } else {
+          Text('Binary Viewer plugin is disabled')
+            .fontSize(12)
+            .fontColor('#AAB2BD')
+            .padding(16)
+            .width('100%')
+            .layoutWeight(1)
+        }
+      } else if (this.activeViewerKind === IDEFileViewerKind.MARKDOWN && this.activeFilePath) {
+        Row({ space: 4 }) {
+          Button('Edit')
+            .fontSize(10)
+            .height(28)
+            .backgroundColor(this.markdownPreview ? Color.Transparent : IDE_SURFACE_SELECTED_COLOR)
+            .onClick(() => this.markdownPreview = false)
+          Button('Preview')
+            .fontSize(10)
+            .height(28)
+            .backgroundColor(this.markdownPreview ? IDE_SURFACE_SELECTED_COLOR : Color.Transparent)
+            .onClick(() => this.markdownPreview = true)
+          Blank()
+          Text(this.activeFilePath)
+            .fontSize(10)
+            .fontColor('#89929F')
+            .maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+        }
+        .width('100%')
+        .height(34)
+        .padding({ left: 8, right: 10 })
+        .backgroundColor(IDE_SURFACE_RAISED_COLOR)
+
+        if (this.markdownPreview) {
+          MarkdownViewerPanel({
+            path: this.activeFilePath,
+            content: this.editorBuffers.get(this.activeFilePath) ?? this.findTab(this.activeFilePath)?.content ?? ''
+          })
+            .layoutWeight(1)
+        } else {
+          Column() {
+            this.buildCodeEditor()
+          }
+          .layoutWeight(1)
+        }
+      } else if (this.activeViewerKind === IDEFileViewerKind.PDF && this.activeFilePath) {
+        PDFViewerPanel({
+          path: this.activeFilePath,
+          runtime: this.documentRuntime
+        })
+          .layoutWeight(1)
+      } else if (this.activeViewerKind === IDEFileViewerKind.DOCUMENT && this.activeFilePath) {
+        DocumentViewerPanel({
+          path: this.activeFilePath,
+          legacy: this.activeViewerType === 'DOC',
+          runtime: this.documentRuntime
+        })
+          .layoutWeight(1)
+      } else if (this.activeViewerKind === IDEFileViewerKind.SPREADSHEET && this.activeFilePath) {
+        SpreadsheetViewerPanel({
+          path: this.activeFilePath,
+          legacy: this.activeViewerType === 'XLS',
+          runtime: this.documentRuntime
+        })
+          .layoutWeight(1)
+      } else if (this.activeViewerKind === IDEFileViewerKind.CSV && this.activeFilePath) {
+        if (this.isCsvTextMode(this.activeFilePath)) {
+          Row({ space: 8 }) {
+            Button('View Table', { buttonStyle: ButtonStyleMode.TEXTUAL })
+              .fontSize(10).height(28).backgroundColor(Color.Transparent)
+              .onClick(() => this.viewCsvAsTable(this.activeFilePath))
+            Text('View Text').fontSize(11).fontColor('#E1E5EA').fontWeight(FontWeight.Medium)
+          }
+          .width('100%').height(36).padding({ left: 12 }).backgroundColor(IDE_SURFACE_RAISED_COLOR)
+          Column() { this.buildCodeEditor() }.layoutWeight(1)
+        } else {
+          CSVViewerPanel({
+            path: this.activeFilePath,
+            content: this.editorBuffers.get(this.activeFilePath) ?? this.findTab(this.activeFilePath)?.content ?? '',
+            runtime: this.documentRuntime,
+            onViewText: (path: string) => this.viewCsvAsText(path)
+          })
+            .layoutWeight(1)
+        }
+      } else if (this.activeViewerKind === IDEFileViewerKind.PRESENTATION && this.activeFilePath) {
+        PresentationViewerPanel({
+          path: this.activeFilePath,
+          legacy: this.activeViewerType === 'PPT',
+          runtime: this.documentRuntime
+        })
+          .layoutWeight(1)
+      } else {
+        Column() {
+          this.buildCodeEditor()
+        }
+        .layoutWeight(1)
+      }
+    }
+    .width('100%')
+    .height('100%')
+  }
+
+  private viewCsvAsText(path: string): void {
+    if (this.csvTextPaths.indexOf(path) === -1) this.csvTextPaths = this.csvTextPaths.concat([path])
+  }
+
+  private viewCsvAsTable(path: string): void {
+    this.csvTextPaths = this.csvTextPaths.filter((value: string): boolean => value !== path)
+  }
+
+  private isCsvTextMode(path: string): boolean {
+    return this.csvTextPaths.indexOf(path) !== -1
   }
 
   @Builder
@@ -1130,6 +1791,8 @@ export default struct IDEWorkbench {
     let activeWasDeleted = false
     for (const tab of this.editorTabs) {
       if (tab.path === path || tab.path.startsWith(path + '/')) {
+        this.binaryEditStore.clear(tab.path)
+        this.documentRuntime.release(tab.path)
         if (tab.path === this.activeFilePath) {
           activeWasDeleted = true
         }
@@ -1138,6 +1801,8 @@ export default struct IDEWorkbench {
       }
     }
     this.replaceEditorTabs(remaining)
+    this.csvTextPaths = this.csvTextPaths.filter((value: string): boolean =>
+      value !== path && !value.startsWith(path + '/'))
     if (activeWasDeleted) {
       this.activeFilePath = remaining.length > 0 ? remaining[0].path : ''
     }
@@ -1148,14 +1813,27 @@ export default struct IDEWorkbench {
     const updated: IDEEditorTab[] = []
     for (const tab of this.editorTabs) {
       if (tab.path === oldPath) {
-        updated.push(new IDEEditorTab(newPath, tab.content, tab.dirty))
+        this.binaryEditStore.rename(tab.path, newPath)
+        this.documentRuntime.release(tab.path)
+        updated.push(new IDEEditorTab(newPath, tab.content, tab.dirty, tab.viewerType, tab.closable, tab.detectedType))
       } else if (tab.path.startsWith(oldPath + '/')) {
-        updated.push(new IDEEditorTab(newPath + tab.path.substring(oldPath.length), tab.content, tab.dirty))
+        const renamedPath = newPath + tab.path.substring(oldPath.length)
+        this.binaryEditStore.rename(tab.path, renamedPath)
+        this.documentRuntime.release(tab.path)
+        updated.push(new IDEEditorTab(renamedPath, tab.content, tab.dirty, tab.viewerType, tab.closable,
+          tab.detectedType))
       } else {
         updated.push(tab)
       }
     }
     this.replaceEditorTabs(updated)
+    const csvPaths: string[] = []
+    for (const path of this.csvTextPaths) {
+      if (path === oldPath) csvPaths.push(newPath)
+      else if (path.startsWith(oldPath + '/')) csvPaths.push(newPath + path.substring(oldPath.length))
+      else csvPaths.push(path)
+    }
+    this.csvTextPaths = csvPaths
     if (this.activeFilePath === oldPath) {
       this.activeFilePath = newPath
     } else if (this.activeFilePath.startsWith(oldPath + '/')) {
@@ -1220,7 +1898,7 @@ export default struct IDEWorkbench {
     Button({ type: ButtonType.Normal, stateEffect: true }) {
       SymbolGlyph($r('sys.symbol.dot_grid_2x2'))
         .fontSize(18)
-        .fontColor(['#8F98A6'])
+        .fontColor([this.pluginsVisible ? '#D9E2F2' : '#8F98A6'])
     }
     .width(34)
     .height(34)
@@ -1232,8 +1910,19 @@ export default struct IDEWorkbench {
   }
 
   build() {
-    Column() {
-      Row() {
+    Stack() {
+      if (this.backgroundVisible()) {
+        Image(this.backgroundImageUri)
+          .width('100%')
+          .height('100%')
+          .objectFit(ImageFit.Cover)
+          .opacity(this.backgroundOpacity / 100)
+          .hitTestBehavior(HitTestMode.None)
+          .zIndex(0)
+      }
+
+      Column() {
+        Row() {
         Column() {
           IDEMenuBar({
             fileTreeVisible: this.fileTreeVisible,
@@ -1282,24 +1971,49 @@ export default struct IDEWorkbench {
         }
         .width(38)
         .height('100%')
-        .backgroundColor('#181B20')
+        .backgroundColor(IDE_SURFACE_COLOR)
+        .border({ width: { right: 1 }, color: '#59616D' })
 
         if (this.fileTreeVisible) {
-          FileTreePanel({
-            fileSystem: this.fileSystem,
-            rootPath: this.fileTreeRootPath,
-            rootRevision: this.fileTreeRootRevision,
-            readyToLoad: this.fileSystemReady,
-            onOpenFile: (path: string) => this.openFile(path),
-            onEntryDeleted: (path: string) => this.entryDeleted(path),
-            onEntryRenamed: (oldPath: string, newPath: string) => this.entryRenamed(oldPath, newPath)
-          })
+          if (this.pluginsVisible) {
+            Column() {
+              Row() {
+                Text('插件')
+                  .fontSize(11)
+                  .fontColor('#BFC5CF')
+                  .fontWeight(FontWeight.Medium)
+                Blank()
+              }
+              .width('100%')
+              .height(36)
+              .padding({ left: 12, right: 8 })
+              .backgroundColor(IDE_SURFACE_RAISED_COLOR)
+              Column() {
+                this.buildPluginManager()
+              }
+              .layoutWeight(1)
+              .padding({ left: 8, right: 8 })
+            }
             .width(this.fileTreeWidth)
+            .height('100%')
+            .backgroundColor(IDE_SURFACE_COLOR)
+          } else {
+            FileTreePanel({
+              fileSystem: this.fileSystem,
+              rootPath: this.fileTreeRootPath,
+              rootRevision: this.fileTreeRootRevision,
+              readyToLoad: this.fileSystemReady,
+              onOpenFile: (path: string) => this.openFile(path),
+              onEntryDeleted: (path: string) => this.entryDeleted(path),
+              onEntryRenamed: (oldPath: string, newPath: string) => this.entryRenamed(oldPath, newPath)
+            })
+              .width(this.fileTreeWidth)
+          }
 
           Row()
             .width(10)
             .height('100%')
-            .backgroundColor('#252930')
+            .backgroundColor(IDE_SPLITTER_COLOR)
             .gesture(
               PanGesture({ direction: PanDirection.Horizontal, distance: 1 })
                 .onActionStart(() => this.fileTreeResizeStartWidth = this.fileTreeWidth)
@@ -1308,29 +2022,16 @@ export default struct IDEWorkbench {
         }
 
         Column() {
-          CodeEditorPanel({
-            tabs: this.editorTabs,
-            activeFilePath: this.activeFilePath,
-            busy: this.editorBusy,
-            statusMessage: this.editorStatus,
-            commandRequest: this.editorCommandRequest,
-            onTabSelected: (path: string) => this.selectTab(path),
-            onTabClose: (path: string) => this.requestCloseTab(path),
-            onContentChange: (path: string, content: string) => this.updateEditorContent(path, content),
-            onSave: (path: string, content: string) => this.saveFile(path, content),
-            onRun: () => this.runActiveFile(),
-            onSelectionChange: (selectedText: string, language: string) =>
-              this.updateEditorSelection(selectedText, language),
-            onStatusChange: (line: number, column: number, encoding: string, lineEnding: string) =>
-              this.updateEditorStatus(line, column, encoding, lineEnding)
-          })
-            .layoutWeight(this.terminalVisible ? this.editorWeight : 1)
+          Column() {
+            this.buildEditorViewer()
+          }
+          .layoutWeight(this.terminalVisible ? this.editorWeight : 1)
 
           if (this.terminalVisible) {
             Row()
               .width('100%')
               .height(10)
-              .backgroundColor('#252930')
+              .backgroundColor(IDE_SPLITTER_COLOR)
               .gesture(
                 PanGesture({ direction: PanDirection.Vertical, distance: 1 })
                   .onActionStart(() => this.editorResizeStartWeight = this.editorWeight)
@@ -1386,7 +2087,9 @@ export default struct IDEWorkbench {
                 if (this.bottomPanelView === IDEBottomPanelView.TERMINAL) {
                   Button(this.runBusy ? $r('app.string.ide_running') : $r('app.string.ide_run'))
                     .fontSize(10)
+                    .fontColor('#D7DAE0')
                     .height(25)
+                    .backgroundColor(IDE_SURFACE_HOVER_COLOR)
                     .enabled(this.activeFilePath.length > 0 && !this.editorBusy && !this.runBusy)
                     .margin({ right: 10 })
                     .onClick(() => { void this.runActiveFile() })
@@ -1395,7 +2098,7 @@ export default struct IDEWorkbench {
               .width('100%')
               .height(32)
               .padding({ left: 6, right: 6 })
-              .backgroundColor('#181B20')
+              .backgroundColor(IDE_SURFACE_RAISED_COLOR)
 
               Stack() {
                 TerminalPanel({
@@ -1432,12 +2135,13 @@ export default struct IDEWorkbench {
         }
         .height('100%')
         .layoutWeight(1)
+        .backgroundColor(IDE_SURFACE_DARK_COLOR)
 
         if (this.aiVisible) {
           Row()
             .width(10)
             .height('100%')
-            .backgroundColor('#252930')
+            .backgroundColor(IDE_SPLITTER_COLOR)
             .gesture(
               PanGesture({ direction: PanDirection.Horizontal, distance: 1 })
                 .onActionStart(() => this.aiPanelResizeStartWidth = this.aiPanelWidth)
@@ -1460,28 +2164,33 @@ export default struct IDEWorkbench {
             onProviderSelected: (id: string) => this.activeAIProviderId = id,
             onSend: (prompt: string) => this.sendAIRequest(prompt),
             onStop: () => this.stopAIRequest(),
-            onClearConversation: () => this.clearAIConversation()
+            onClearConversation: () => this.clearAIConversation(),
+            onChooseHiSHUploadFiles: (): Promise<string[]> => this.chooseHiSHUploadFiles()
           })
             .width(this.aiPanelWidth)
         }
+        }
+        .width('100%')
+        .layoutWeight(1)
+        .onAreaChange((_oldValue: Area, newValue: Area): void => {
+          this.updateWorkbenchAvailableWidth(Number(newValue.width))
+        })
+
+        IDEStatusBar({
+          activeFilePath: this.activeFilePath,
+          dirty: this.findTab(this.activeFilePath)?.dirty || false,
+          line: this.editorLine,
+          column: this.editorColumn,
+          encoding: this.editorEncoding,
+          lineEnding: this.editorLineEnding
+        })
       }
       .width('100%')
-      .layoutWeight(1)
-      .onAreaChange((_oldValue: Area, newValue: Area): void => {
-        this.updateWorkbenchAvailableWidth(Number(newValue.width))
-      })
-
-      IDEStatusBar({
-        activeFilePath: this.activeFilePath,
-        dirty: this.findTab(this.activeFilePath)?.dirty || false,
-        line: this.editorLine,
-        column: this.editorColumn,
-        encoding: this.editorEncoding,
-        lineEnding: this.editorLineEnding
-      })
+      .height('100%')
+      .backgroundColor(this.backgroundVisible() ? Color.Transparent : '#111318')
+      .zIndex(1)
     }
     .width('100%')
     .height('100%')
-    .backgroundColor('#111318')
   }
 }

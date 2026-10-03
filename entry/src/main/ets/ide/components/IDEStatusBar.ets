@@ -1,6 +1,7 @@
 import { connection } from '@kit.NetworkKit'
 import { wifiManager } from '@kit.ConnectivityKit'
 import IDEHostStatusAdapter from '../system/IDEHostStatusAdapter'
+import { IDE_STATUS_SURFACE_COLOR } from '../theme/IDEBackgroundSurfaces'
 
 @Component
 export default struct IDEStatusBar {
@@ -193,6 +194,6 @@ export default struct IDEStatusBar {
     .width('100%')
     .height(24)
     .padding({ left: 10, right: 10 })
-    .backgroundColor('#243B63')
+    .backgroundColor(IDE_STATUS_SURFACE_COLOR)
   }
 }

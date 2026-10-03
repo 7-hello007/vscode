@@ -1,6 +1,13 @@
 import { common, Want } from '@kit.AbilityKit'
+import { picker } from '@kit.CoreFileKit'
 import { webview } from '@kit.ArkWeb'
 import { WebAIProvider, webAIProviderRegistry } from '../webai/WebAIProviderRegistry'
+import {
+  IDE_BORDER_SUBTLE_COLOR,
+  IDE_SURFACE_COLOR,
+  IDE_SURFACE_MESSAGE_COLOR,
+  IDE_SURFACE_RAISED_COLOR
+} from '../theme/IDEBackgroundSurfaces'
 
 enum WebAILoadState {
   LOADING = 0,
@@ -16,6 +23,7 @@ export default struct AIWebPanel {
   @Watch('onForwardRequested') @Prop forwardRequest: number = 0
   @Watch('onRefreshRequested') @Prop refreshRequest: number = 0
   @Require onNavigationStateChanged: (canGoBack: boolean, canGoForward: boolean) => void
+  @Require onChooseHiSHUploadFiles: () => Promise<string[]>
   @State loadState: WebAILoadState = WebAILoadState.LOADING
   @State errorText: string = ''
   @State canGoBack: boolean = false
@@ -23,6 +31,7 @@ export default struct AIWebPanel {
   private controller: WebviewController = new webview.WebviewController()
   private controllerAttached: boolean = false
   private providerUrls: Map<string, string> = new Map<string, string>()
+  private fileSelectionInFlight: boolean = false
 
   private provider(): WebAIProvider | null {
     return webAIProviderRegistry.find(this.providerId)
@@ -150,6 +159,41 @@ export default struct AIWebPanel {
     }
   }
 
+  private async chooseDeviceFiles(multiple: boolean): Promise<string[]> {
+    const context = this.getUIContext().getHostContext() as common.UIAbilityContext
+    const options = new picker.DocumentSelectOptions()
+    options.maxSelectNumber = multiple ? 9 : 1
+    return await new picker.DocumentViewPicker(context).select(options)
+  }
+
+  private async handleFileSelector(event: OnShowFileSelectorEvent): Promise<void> {
+    if (this.fileSelectionInFlight) {
+      event.result.handleFileList([])
+      return
+    }
+    this.fileSelectionInFlight = true
+    try {
+      const response = await this.getUIContext().getPromptAction().showActionMenu({
+        title: 'Choose upload source',
+        buttons: [
+          { text: 'HiSH Files', color: '#D7DAE0' },
+          { text: 'Device Files', color: '#D7DAE0' }
+        ]
+      })
+      let files: string[] = []
+      if (response.index === 0) {
+        files = await this.onChooseHiSHUploadFiles()
+      } else if (response.index === 1) {
+        files = await this.chooseDeviceFiles(event.fileSelector.getMode() === FileSelectorMode.FileOpenMultipleMode)
+      }
+      event.result.handleFileList(files)
+    } catch (error) {
+      event.result.handleFileList([])
+    } finally {
+      this.fileSelectionInFlight = false
+    }
+  }
+
   build() {
     Column() {
       Stack() {
@@ -182,7 +226,10 @@ export default struct AIWebPanel {
             }
           })
           .onOverrideUrlLoading((request: WebResourceRequest): boolean => this.shouldOverride(request))
-          .onShowFileSelector((_event: OnShowFileSelectorEvent): boolean => true)
+          .onShowFileSelector((event: OnShowFileSelectorEvent): boolean => {
+            void this.handleFileSelector(event)
+            return true
+          })
 
         if (this.loadState === WebAILoadState.LOADING) {
           Column({ space: 8 }) {
@@ -197,7 +244,7 @@ export default struct AIWebPanel {
           .width('100%')
           .height('100%')
           .justifyContent(FlexAlign.Center)
-          .backgroundColor('#E6181B20')
+          .backgroundColor(IDE_SURFACE_MESSAGE_COLOR)
         } else if (this.loadState === WebAILoadState.LOAD_FAILED ||
           this.loadState === WebAILoadState.UNSUPPORTED) {
           Column({ space: 9 }) {
@@ -224,7 +271,8 @@ export default struct AIWebPanel {
           .height('100%')
           .padding(16)
           .justifyContent(FlexAlign.Center)
-          .backgroundColor('#181B20')
+          .backgroundColor(IDE_SURFACE_RAISED_COLOR)
+          .border({ width: 1, color: IDE_BORDER_SUBTLE_COLOR })
         }
       }
       .width('100%')
@@ -232,6 +280,6 @@ export default struct AIWebPanel {
     }
     .width('100%')
     .height('100%')
-    .backgroundColor('#181B20')
+    .backgroundColor(IDE_SURFACE_COLOR)
   }
 }

@@ -1,3 +1,9 @@
+import {
+  IDE_BORDER_SUBTLE_COLOR,
+  IDE_SURFACE_POPUP_COLOR,
+  IDE_SURFACE_TOOLBAR_COLOR
+} from '../theme/IDEBackgroundSurfaces'
+
 enum IDEMainMenuSection {
   FILE = 0,
   EDIT = 1,
@@ -97,6 +103,8 @@ export default struct IDEMenuBar {
       .fontSize(12)
       .fontColor('#D7DAE0')
       .backgroundColor(Color.Transparent)
+      .stateEffect(true)
+      .hoverEffect(HoverEffect.Auto)
       .onClick(() => this.openSection(section))
   }
 
@@ -108,6 +116,8 @@ export default struct IDEMenuBar {
       .fontSize(11)
       .fontColor('#D7DAE0')
       .backgroundColor(Color.Transparent)
+      .stateEffect(true)
+      .hoverEffect(HoverEffect.Auto)
       .onClick(() => this.invoke(action))
   }
 
@@ -175,7 +185,7 @@ export default struct IDEMenuBar {
         }
         .width('100%')
         .padding(4)
-        .backgroundColor('#181B20')
+        .backgroundColor(IDE_SURFACE_POPUP_COLOR)
       } else {
         Row({ space: 8 }) {
           Button('‹', { buttonStyle: ButtonStyleMode.TEXTUAL })
@@ -194,9 +204,9 @@ export default struct IDEMenuBar {
         .width('100%')
         .height(38)
         .padding({ left: 4, right: 8 })
-        .backgroundColor('#181B20')
+        .backgroundColor(IDE_SURFACE_TOOLBAR_COLOR)
 
-        Divider().color('#30343B')
+        Divider().color(IDE_BORDER_SUBTLE_COLOR)
 
         Scroll() {
           this.actionPanel()
@@ -204,12 +214,13 @@ export default struct IDEMenuBar {
         .width('100%')
         .layoutWeight(1)
         .scrollBar(BarState.Auto)
-        .backgroundColor('#20242B')
+        .backgroundColor(IDE_SURFACE_POPUP_COLOR)
       }
     }
     .width(this.popupWidth())
     .height(this.popupHeight())
-    .border({ width: 1, color: '#3B414B' })
+    .backgroundColor(IDE_SURFACE_POPUP_COLOR)
+    .border({ width: 1, color: IDE_BORDER_SUBTLE_COLOR })
     .borderRadius(6)
   }
 
@@ -231,7 +242,7 @@ export default struct IDEMenuBar {
       .bindPopup(this.popupVisible, {
         builder: this.popupBuilder,
         placement: Placement.BottomLeft,
-        popupColor: '#20242B',
+        popupColor: IDE_SURFACE_POPUP_COLOR,
         enableArrow: false,
         onStateChange: (event: PopupStateChangeParam) => {
           this.popupVisible = event.isVisible

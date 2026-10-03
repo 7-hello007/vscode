@@ -4,6 +4,7 @@ import { IDEPlugin, IDEPluginCapability, IDEPluginContext, IDEPluginState } from
 interface RegisteredPlugin {
   plugin: IDEPlugin
   enabled: boolean
+  lifecycleError: string
 }
 
 /** In-process registry for small IDE extensions; this is not an extension host. */
@@ -19,10 +20,9 @@ export default class IDEPluginRegistry {
     if (!plugin.manifest.id || this.findIndex(plugin.manifest.id) !== -1) {
       return false
     }
-    this.plugins.push({ plugin, enabled: false })
+    this.plugins.push({ plugin, enabled: false, lifecycleError: '' })
     if (enabled) {
-      plugin.activate(this.context)
-      this.plugins[this.plugins.length - 1].enabled = true
+      this.activateSafely(this.plugins.length - 1)
     }
     return true
   }
@@ -33,7 +33,7 @@ export default class IDEPluginRegistry {
       return false
     }
     if (this.plugins[index].enabled) {
-      this.plugins[index].plugin.deactivate()
+      this.deactivateSafely(index)
     }
     this.plugins.splice(index, 1)
     return true
@@ -45,12 +45,10 @@ export default class IDEPluginRegistry {
       return index !== -1
     }
     if (enabled) {
-      this.plugins[index].plugin.activate(this.context)
+      return this.activateSafely(index)
     } else {
-      this.plugins[index].plugin.deactivate()
+      return this.deactivateSafely(index)
     }
-    this.plugins[index].enabled = enabled
-    return true
   }
 
   list(): IDEPluginState[] {
@@ -60,7 +58,8 @@ export default class IDEPluginRegistry {
         manifest: registered.plugin.manifest,
         enabled: registered.enabled,
         checkerStatus: registered.plugin.checkerStatus,
-        checkerMessage: registered.plugin.checkerMessage
+        checkerMessage: registered.plugin.checkerMessage,
+        lifecycleError: registered.lifecycleError
       })
     }
     return states
@@ -106,5 +105,34 @@ export default class IDEPluginRegistry {
       }
     }
     return -1
+  }
+
+  private activateSafely(index: number): boolean {
+    try {
+      this.plugins[index].plugin.activate(this.context)
+      this.plugins[index].enabled = true
+      this.plugins[index].lifecycleError = ''
+      return true
+    } catch (error) {
+      this.plugins[index].enabled = false
+      this.plugins[index].lifecycleError = (error as Error).message || 'Plugin activation failed'
+      console.error('Plugin activation failed: ' + this.plugins[index].plugin.manifest.id + ': ' +
+        this.plugins[index].lifecycleError)
+      return false
+    }
+  }
+
+  private deactivateSafely(index: number): boolean {
+    try {
+      this.plugins[index].plugin.deactivate()
+      this.plugins[index].enabled = false
+      this.plugins[index].lifecycleError = ''
+      return true
+    } catch (error) {
+      this.plugins[index].lifecycleError = (error as Error).message || 'Plugin deactivation failed'
+      console.error('Plugin deactivation failed: ' + this.plugins[index].plugin.manifest.id + ': ' +
+        this.plugins[index].lifecycleError)
+      return false
+    }
   }
 }

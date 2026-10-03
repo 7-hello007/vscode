@@ -1,5 +1,6 @@
 import WebTerminal from '../../components/WebTerminal'
 import { terminalOutputBridge } from '../../lib/TerminalOutputBridge'
+import { IDE_SURFACE_HOVER_COLOR, IDE_SURFACE_RAISED_COLOR } from '../theme/IDEBackgroundSurfaces'
 
 const IDE_TERMINAL_OUTPUT_SUBSCRIBER = 'IDE.TerminalPanel.AIContext'
 
@@ -56,7 +57,9 @@ export default struct TerminalPanel {
           Blank()
           Button(this.running ? $r('app.string.ide_running') : $r('app.string.ide_run'))
             .fontSize(10)
+            .fontColor('#D7DAE0')
             .height(25)
+            .backgroundColor(IDE_SURFACE_HOVER_COLOR)
             .enabled(this.canRun && !this.running)
             .margin({ right: 10 })
             .onClick(() => this.onRun())
@@ -67,7 +70,7 @@ export default struct TerminalPanel {
         .width('100%')
         .height(32)
         .padding({ left: 12, right: 12 })
-        .backgroundColor('#181B20')
+        .backgroundColor(IDE_SURFACE_RAISED_COLOR)
       }
 
       WebTerminal({
@@ -79,6 +82,6 @@ export default struct TerminalPanel {
     }
     .width('100%')
     .height('100%')
-    .backgroundColor('#000000')
+    .backgroundColor(Color.Transparent)
   }
 }

@@ -10,6 +10,14 @@ import {
   CodingAgentTask,
   CodingAgentToolActivity
 } from '../agent/CodingAgentContracts'
+import {
+  IDE_BORDER_SUBTLE_COLOR,
+  IDE_SURFACE_COLOR,
+  IDE_SURFACE_INPUT_COLOR,
+  IDE_SURFACE_MESSAGE_COLOR,
+  IDE_SURFACE_SELECTED_COLOR,
+  IDE_SURFACE_TOOLBAR_COLOR
+} from '../theme/IDEBackgroundSurfaces'
 import { codexAgentProvider } from '../agent/CodexAgentProvider'
 
 const CODEX_PANEL_SUBSCRIBER = 'IDE.CodingAgentPanel'
@@ -117,7 +125,8 @@ export default struct CodingAgentPanel {
         }
         .width('100%')
         .padding(10)
-        .backgroundColor('#20242A')
+        .backgroundColor(IDE_SURFACE_TOOLBAR_COLOR)
+        .border({ width: 1, color: IDE_BORDER_SUBTLE_COLOR })
       }
 
       if (this.errorText && this.errorText !== 'NOT_CONFIGURED') {
@@ -145,7 +154,9 @@ export default struct CodingAgentPanel {
             .width('100%')
             .padding(8)
             .alignItems(HorizontalAlign.Start)
-            .backgroundColor(message.role === CodingAgentMessageRole.USER ? '#1E2731' : '#1B1F25')
+            .backgroundColor(message.role === CodingAgentMessageRole.USER ?
+              IDE_SURFACE_SELECTED_COLOR : IDE_SURFACE_MESSAGE_COLOR)
+            .border({ width: 1, color: IDE_BORDER_SUBTLE_COLOR })
           }, (message: CodingAgentMessage): string => message.id)
 
           if (this.activities.length > 0) {
@@ -162,7 +173,8 @@ export default struct CodingAgentPanel {
             }
             .width('100%')
             .padding(8)
-            .backgroundColor('#171A1F')
+            .backgroundColor(IDE_SURFACE_MESSAGE_COLOR)
+            .border({ width: 1, color: IDE_BORDER_SUBTLE_COLOR })
           }
 
           if (this.pendingApproval) {
@@ -210,7 +222,7 @@ export default struct CodingAgentPanel {
             .width('100%')
             .padding(10)
             .alignItems(HorizontalAlign.Start)
-            .backgroundColor('#25231D')
+            .backgroundColor(IDE_SURFACE_MESSAGE_COLOR)
             .border({ width: 1, color: '#5B5038' })
           }
         }
@@ -226,7 +238,8 @@ export default struct CodingAgentPanel {
         .fontSize(11)
         .fontColor('#D7DAE0')
         .placeholderColor('#697382')
-        .backgroundColor('#20242A')
+        .backgroundColor(IDE_SURFACE_INPUT_COLOR)
+        .border({ width: 1, color: IDE_BORDER_SUBTLE_COLOR })
         .enabled(true)
         .onChange((value: string): void => {
           this.prompt = value
@@ -259,6 +272,6 @@ export default struct CodingAgentPanel {
     .width('100%')
     .height('100%')
     .padding({ left: 10, right: 10, bottom: 8 })
-    .backgroundColor('#181B20')
+    .backgroundColor(IDE_SURFACE_COLOR)
   }
 }

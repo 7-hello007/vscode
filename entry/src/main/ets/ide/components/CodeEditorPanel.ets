@@ -1,6 +1,7 @@
 import { util } from '@kit.ArkTS'
 import { webview } from '@kit.ArkWeb'
 import { IDEEditorTab } from '../model/IDEEditorTab'
+import { IDE_SURFACE_DARK_COLOR, IDE_SURFACE_RAISED_COLOR } from '../theme/IDEBackgroundSurfaces'
 
 @Component
 export default struct CodeEditorPanel {
@@ -9,6 +10,7 @@ export default struct CodeEditorPanel {
   @Prop busy: boolean = false
   @Watch('onStatusMessageChanged') @Prop statusMessage: string = ''
   @Watch('onCommandRequestChanged') @Prop commandRequest: string = ''
+  @Prop tabBarVisible: boolean = true
   @Require onTabSelected: (path: string) => void
   @Require onTabClose: (path: string) => void
   @Require onContentChange: (path: string, content: string) => void
@@ -216,44 +218,45 @@ export default struct CodeEditorPanel {
 
   build() {
     Column() {
-      Row() {
-        List({ space: 1 }) {
-          ForEach(this.tabs, (tab: IDEEditorTab) => {
-            ListItem() {
-              Row({ space: 7 }) {
-                SymbolGlyph($r('sys.symbol.doc_text'))
-                  .fontSize(13)
-                  .fontColor([tab.path === this.activeFilePath ? '#C5CCD6' : '#7E8794'])
-                Text(tab.name + (tab.dirty ? ' ●' : ''))
-                  .fontSize(11)
-                  .fontColor(tab.path === this.activeFilePath ? '#E2E5EA' : '#939CAA')
-                  .maxLines(1)
-                  .textOverflow({ overflow: TextOverflow.Ellipsis })
-                Text('×')
-                  .fontSize(15)
-                  .fontColor('#8F98A6')
-                  .padding({ left: 3, right: 3 })
-                  .onClick(() => this.onTabClose(tab.path))
+      if (this.tabBarVisible) {
+        Row() {
+          List({ space: 1 }) {
+            ForEach(this.tabs, (tab: IDEEditorTab) => {
+              ListItem() {
+                Row({ space: 7 }) {
+                  SymbolGlyph($r('sys.symbol.doc_text'))
+                    .fontSize(13)
+                    .fontColor([tab.path === this.activeFilePath ? '#C5CCD6' : '#7E8794'])
+                  Text(tab.name + (tab.dirty ? ' ●' : ''))
+                    .fontSize(11)
+                    .fontColor(tab.path === this.activeFilePath ? '#E2E5EA' : '#939CAA')
+                    .maxLines(1)
+                    .textOverflow({ overflow: TextOverflow.Ellipsis })
+                  Text('×')
+                    .fontSize(15)
+                    .fontColor('#8F98A6')
+                    .padding({ left: 3, right: 3 })
+                    .onClick(() => this.onTabClose(tab.path))
+                }
+                .height(34)
+                .padding({ left: 10, right: 6 })
+                .backgroundColor(tab.path === this.activeFilePath ? IDE_SURFACE_RAISED_COLOR : IDE_SURFACE_DARK_COLOR)
+                .border({
+                  width: { bottom: tab.path === this.activeFilePath ? 2 : 0 },
+                  color: '#7AA2F7'
+                })
+                .onClick(() => this.onTabSelected(tab.path))
               }
-              .height(34)
-              .padding({ left: 10, right: 6 })
-              .backgroundColor(tab.path === this.activeFilePath ? '#20242B' : '#16191E')
-              .border({
-                width: { bottom: tab.path === this.activeFilePath ? 2 : 0 },
-                color: '#7AA2F7'
-              })
-              .onClick(() => this.onTabSelected(tab.path))
-            }
-          }, (tab: IDEEditorTab): string => tab.path)
+            }, (tab: IDEEditorTab): string => tab.path)
+          }
+          .listDirection(Axis.Horizontal)
+          .layoutWeight(1)
+          .height(34)
         }
-        .listDirection(Axis.Horizontal)
-        .layoutWeight(1)
-        .height(34)
-
+        .width('100%')
+        .height(35)
+        .backgroundColor(IDE_SURFACE_DARK_COLOR)
       }
-      .width('100%')
-      .height(35)
-      .backgroundColor('#16191E')
 
       Web({
         src: $rawfile('ide/editor.html'),
@@ -281,10 +284,10 @@ export default struct CodeEditorPanel {
         })
         .width('100%')
         .layoutWeight(1)
-        .backgroundColor('#20242B')
+        .backgroundColor(Color.Transparent)
     }
     .width('100%')
     .height('100%')
-    .backgroundColor('#20242B')
+    .backgroundColor(Color.Transparent)
   }
 }

@@ -3,11 +3,15 @@ export enum IDEPluginCapability {
   DIAGNOSTIC = 'diagnostic',
   RUN = 'run',
   FORMAT = 'format',
-  SOURCE_CONTROL = 'sourceControl'
+  SOURCE_CONTROL = 'sourceControl',
+  FILE_VIEWER = 'fileViewer',
+  GLOBAL_BACKGROUND = 'globalBackground'
 }
 
 export enum IDEPluginType {
   LANGUAGE_DIAGNOSTIC = 'Language / Diagnostic Plugin',
+  FILE_VIEWER = 'File Viewer Plugin',
+  APPEARANCE = 'Appearance Plugin',
   GENERAL = 'IDE Plugin'
 }
 
@@ -44,4 +48,5 @@ export interface IDEPluginState {
   enabled: boolean
   checkerStatus: IDEPluginCheckerStatus
   checkerMessage: string
+  lifecycleError: string
 }

@@ -1,4 +1,5 @@
 import { IDEProblem, IDEProblemSeverity } from '../problems/IDEProblemContracts'
+import { IDE_SURFACE_RAISED_COLOR } from '../theme/IDEBackgroundSurfaces'
 
 @Component
 export default struct ProblemsPanel {
@@ -39,7 +40,7 @@ export default struct ProblemsPanel {
       .width('100%')
       .height(32)
       .padding({ left: 8, right: 10 })
-      .backgroundColor('#181B20')
+      .backgroundColor(IDE_SURFACE_RAISED_COLOR)
 
       if (this.status) {
         Text(this.status)
@@ -81,16 +82,19 @@ export default struct ProblemsPanel {
               }
               .width('100%')
               .padding({ left: 12, right: 10, top: 7, bottom: 7 })
+              .backgroundColor(Color.Transparent)
               .onClick(() => this.onOpenProblem(problem))
             }
+            .backgroundColor(Color.Transparent)
           }, (problem: IDEProblem): string => problem.id)
         }
         .width('100%')
         .layoutWeight(1)
+        .backgroundColor(Color.Transparent)
       }
     }
     .width('100%')
     .height('100%')
-    .backgroundColor('#111318')
+    .backgroundColor(Color.Transparent)
   }
 }

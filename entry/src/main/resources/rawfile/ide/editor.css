@@ -1,7 +1,7 @@
 :root {
   color-scheme: dark;
-  --background: #20242b;
-  --surface: #181b20;
+  --background: transparent;
+  --surface: rgba(24, 27, 32, .78);
   --border: #30343b;
   --text: #d9dce2;
   --muted: #7e8794;
@@ -17,7 +17,7 @@ html, body {
   height: 100%;
   margin: 0;
   overflow: hidden;
-  background: var(--background);
+  background: transparent;
   color: var(--text);
   font-family: system-ui, sans-serif;
 }
@@ -30,7 +30,7 @@ button, input { font: inherit; }
   grid-template-rows: minmax(0, 1fr);
   width: 100%;
   height: 100%;
-  background: var(--background);
+  background: transparent;
 }
 
 .workspace:not(.empty).find-open { grid-template-rows: 34px minmax(0, 1fr); }
@@ -106,7 +106,7 @@ button, input { font: inherit; }
   overflow: hidden;
   border-right: 1px solid var(--border);
   color: #697381;
-  background: #1b1e24;
+  background: rgba(27, 30, 36, .55);
   user-select: none;
   font: var(--font);
   line-height: var(--line-height);

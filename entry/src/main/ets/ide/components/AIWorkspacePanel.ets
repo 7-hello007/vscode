@@ -3,6 +3,12 @@ import { LOCAL_AI_WORKSPACE_ID, webAIProviderRegistry } from '../webai/WebAIProv
 import AIAssistantPanel from './AIAssistantPanel'
 import AIWebPanel from './AIWebPanel'
 import CodingAgentPanel from './CodingAgentPanel'
+import {
+  IDE_BORDER_SUBTLE_COLOR,
+  IDE_SURFACE_COLOR,
+  IDE_SURFACE_INPUT_COLOR,
+  IDE_SURFACE_RAISED_COLOR
+} from '../theme/IDEBackgroundSurfaces'
 
 const CODEX_AGENT_WORKSPACE_ID = 'agent.codex'
 
@@ -34,6 +40,7 @@ export default struct AIWorkspacePanel {
   @Require onSend: (prompt: string) => void
   @Require onStop: () => void
   @Require onClearConversation: () => void
+  @Require onChooseHiSHUploadFiles: () => Promise<string[]>
   @State activeWorkspaceId: string = LOCAL_AI_WORKSPACE_ID
   @State lastWebProviderId: string = ''
   @State webStarted: boolean = false
@@ -172,16 +179,18 @@ export default struct AIWorkspacePanel {
           .fontSize(10)
           .fontColor('#AEB6C2')
           .height(28)
-          .backgroundColor(Color.Transparent)
+          .backgroundColor(IDE_SURFACE_INPUT_COLOR)
+          .border({ width: 1, color: IDE_BORDER_SUBTLE_COLOR })
+          .borderRadius(5)
           .stateEffect(true)
           .bindMenu(this.providerMenu())
       }
       .width('100%')
       .height(36)
       .padding({ left: 12, right: 10 })
-      .backgroundColor('#181B20')
+      .backgroundColor(IDE_SURFACE_RAISED_COLOR)
 
-      Divider().strokeWidth(1).color('#30343B')
+      Divider().strokeWidth(1).color(IDE_BORDER_SUBTLE_COLOR)
 
       Stack() {
         AIAssistantPanel({
@@ -213,6 +222,7 @@ export default struct AIWorkspacePanel {
             backRequest: this.webBackRequest,
             forwardRequest: this.webForwardRequest,
             refreshRequest: this.webRefreshRequest,
+            onChooseHiSHUploadFiles: (): Promise<string[]> => this.onChooseHiSHUploadFiles(),
             onNavigationStateChanged: (canGoBack: boolean, canGoForward: boolean): void =>
               this.updateWebNavigationState(canGoBack, canGoForward)
           })
@@ -224,6 +234,6 @@ export default struct AIWorkspacePanel {
     }
     .width('100%')
     .height('100%')
-    .backgroundColor('#181B20')
+    .backgroundColor(IDE_SURFACE_COLOR)
   }
 }

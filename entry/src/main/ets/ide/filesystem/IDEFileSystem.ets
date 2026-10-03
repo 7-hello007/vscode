@@ -10,6 +10,7 @@ interface ShellResult {
 
 const AGENT_USER_ID = 'IDEFileSystem'
 const STATUS_MARKER = '__HISH_IDE_STATUS__'
+const MAX_BINARY_READ_LENGTH = 64 * 1024
 
 /**
  * Thin IDE-facing adapter for files stored inside the Linux guest.
@@ -91,6 +92,62 @@ export default class IDEFileSystem {
     const script = '[ -f ' + quotedPath + ' ] || exit 21\ncat ' + quotedPath
     const result = await this.runShell('read file', script, 15000)
     return result.output
+  }
+
+  /**
+   * Reads an exact byte range without decoding guest data as UTF-8.
+   * The QGA text channel carries only Base64 ASCII; callers receive the
+   * original 00-FF byte values, including NUL.
+   */
+  async readBinary(path: string, offset: number, length: number): Promise<Uint8Array> {
+    if (!Number.isFinite(offset) || !Number.isInteger(offset) || offset < 0 ||
+      !Number.isFinite(length) || !Number.isInteger(length) || length < 0 ||
+      length > MAX_BINARY_READ_LENGTH) {
+      throw new IDEFileSystemError('read binary',
+        'Binary reads require a non-negative offset and length up to ' + MAX_BINARY_READ_LENGTH + ' bytes')
+    }
+    if (length === 0) return new Uint8Array(0)
+    const target = this.normalizePath(path)
+    const quotedTarget = this.shellQuote(target)
+    const script =
+      '[ -f ' + quotedTarget + ' ] || exit 21\n' +
+      'dd if=' + quotedTarget + ' bs=1 skip=' + offset + ' count=' + length +
+      ' 2>/dev/null | base64 | tr -d \'\\n\''
+    const result = await this.runShell('read binary', script, 20000)
+    const encoded = result.output.trim()
+    if (!encoded) return new Uint8Array(0)
+    try {
+      return new util.Base64Helper().decodeSync(encoded)
+    } catch (error) {
+      throw new IDEFileSystemError('read binary', 'Linux VM returned invalid binary transfer data')
+    }
+  }
+
+  /** Atomically replaces one byte range without text decoding or truncating the file. */
+  async writeBinary(path: string, offset: number, bytes: Uint8Array): Promise<void> {
+    if (!Number.isFinite(offset) || !Number.isInteger(offset) || offset < 0 ||
+      bytes.byteLength > MAX_BINARY_READ_LENGTH) {
+      throw new IDEFileSystemError('write binary',
+        'Binary writes require a non-negative offset and at most ' + MAX_BINARY_READ_LENGTH + ' bytes')
+    }
+    if (bytes.byteLength === 0) return
+    const target = this.normalizePath(path)
+    if (target === '/') throw new IDEFileSystemError('write binary', 'The Linux root directory is not a file')
+    const quotedTarget = this.shellQuote(target)
+    const encoded = new util.Base64Helper().encodeToStringSync(bytes)
+    const quotedEncoded = this.shellQuote(encoded)
+    const script =
+      '[ -f ' + quotedTarget + ' ] || exit 21\n' +
+      'ide_target=' + quotedTarget + '\n' +
+      'ide_temp="${ide_target}.hish-binary-$$"\n' +
+      'cp -p "$ide_target" "$ide_temp" || exit $?\n' +
+      'printf \'%s\' ' + quotedEncoded + ' | base64 -d | ' +
+      'dd of="$ide_temp" bs=1 seek=' + offset + ' conv=notrunc 2>/dev/null\n' +
+      'ide_write_status=$?\n' +
+      'if [ "$ide_write_status" -eq 0 ]; then mv -f "$ide_temp" "$ide_target"; ' +
+      'else rm -f "$ide_temp"; fi\n' +
+      'exit "$ide_write_status"'
+    await this.runShell('write binary', script, 20000)
   }
 
   async createFile(parentPath: string, name: string): Promise<string> {

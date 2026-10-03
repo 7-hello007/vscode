@@ -5,6 +5,14 @@ import {
   IDEAIProviderInfo,
   IDEAIProviderKind
 } from '../model/IDEAIContracts'
+import {
+  IDE_BORDER_SUBTLE_COLOR,
+  IDE_SURFACE_COLOR,
+  IDE_SURFACE_INPUT_COLOR,
+  IDE_SURFACE_MESSAGE_COLOR,
+  IDE_SURFACE_SELECTED_COLOR,
+  IDE_SURFACE_TOOLBAR_COLOR
+} from '../theme/IDEBackgroundSurfaces'
 
 class AIProviderMenuOption {
   value: string = ''
@@ -79,7 +87,9 @@ export default struct AIAssistantPanel {
     .alignItems(HorizontalAlign.Start)
     .padding(9)
     .borderRadius(6)
-    .backgroundColor(message.role === IDEAIMessageRole.USER ? '#243B63' : '#20242B')
+    .backgroundColor(message.role === IDEAIMessageRole.USER ?
+      IDE_SURFACE_SELECTED_COLOR : IDE_SURFACE_MESSAGE_COLOR)
+    .border({ width: 1, color: IDE_BORDER_SUBTLE_COLOR })
   }
 
   build() {
@@ -142,7 +152,8 @@ export default struct AIAssistantPanel {
       .width('100%')
       .alignItems(HorizontalAlign.Start)
       .padding({ left: 12, right: 12, top: 8, bottom: 8 })
-      .backgroundColor('#16191E')
+      .backgroundColor(IDE_SURFACE_TOOLBAR_COLOR)
+      .border({ width: { bottom: 1 }, color: IDE_BORDER_SUBTLE_COLOR })
 
       if (this.messages.length === 0) {
         Column({ space: 9 }) {
@@ -216,7 +227,9 @@ export default struct AIAssistantPanel {
           .layoutWeight(1)
           .height(34)
           .fontSize(11)
-          .backgroundColor('#20242B')
+          .backgroundColor(IDE_SURFACE_INPUT_COLOR)
+          .border({ width: 1, color: IDE_BORDER_SUBTLE_COLOR })
+          .borderRadius(6)
           .onChange((value: string) => this.prompt = value)
           .onSubmit(() => this.submit())
         Button(this.busy ? $r('app.string.ide_ai_thinking') : $r('app.string.ide_ai_send'))
@@ -237,6 +250,6 @@ export default struct AIAssistantPanel {
     }
     .width('100%')
     .height('100%')
-    .backgroundColor('#181B20')
+    .backgroundColor(IDE_SURFACE_COLOR)
   }
 }

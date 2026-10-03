@@ -228,7 +228,7 @@ export default struct WebTerminal {
           }
         }`
         })
-        .backgroundColor('#000')
+        .backgroundColor(Color.Transparent)
         .layoutWeight(1)
         .bindContextMenu(this.contextMenu(this.webviewController), ResponseType.RightClick)
       if (this.virtKeyEnabled) {

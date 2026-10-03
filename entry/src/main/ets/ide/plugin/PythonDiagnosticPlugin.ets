@@ -20,7 +20,7 @@ export default class PythonDiagnosticPlugin implements IDEDiagnosticPlugin {
     id: 'hish.python',
     name: 'Python',
     version: '1.0.0',
-    description: 'Python language diagnostics using python3 inside the HiSH Linux guest.',
+    description: '使用 HiSH Linux guest 中的 python3 提供 Python 语言诊断。',
     type: IDEPluginType.LANGUAGE_DIAGNOSTIC,
     capabilities: [IDEPluginCapability.LANGUAGE, IDEPluginCapability.DIAGNOSTIC]
   }
