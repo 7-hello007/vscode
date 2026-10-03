@@ -19,6 +19,9 @@ export const checkPortUsed: (port: number) => boolean;
 /** Stream and verify the bundled GGUF into the app sandbox. */
 export const prepareBundledModel: (resourceManager: object, filesDir: string) => Promise<string>;
 
+/** Stream and verify the pinned OpenAI Codex ARM64-musl ELF into the shared runtime directory. */
+export const prepareBundledCodex: (resourceManager: object, targetPath: string) => Promise<string>;
+
 /** Load a GGUF model from an app-accessible absolute path. */
 export const loadModel: (path: string) => Promise<boolean>;
 

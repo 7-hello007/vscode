@@ -173,8 +173,10 @@ include_directories(
 # HiSH sources
 add_library(entry SHARED
     napi_init.cpp
+    napi_codex_runtime.cpp
     napi_local_inference.cpp
     napi_vnc.cpp
+    codex_runtime_installer.cpp
     local_inference_runtime.cpp
     local_model_installer.cpp
     third_party/llama.cpp/vendor/hash/sha256/sha256.c

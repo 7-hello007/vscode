@@ -187,10 +187,11 @@ export class CodingAgentSnapshot {
   pendingApproval: CodingAgentApprovalRequest | null
   error: string
   configured: boolean
+  authState: string
 
   constructor(state: CodingAgentState, sessionId: string, messages: CodingAgentMessage[],
     activities: CodingAgentToolActivity[], pendingApproval: CodingAgentApprovalRequest | null,
-    error: string, configured: boolean) {
+    error: string, configured: boolean, authState: string = 'SIGNED_OUT') {
     this.state = state
     this.sessionId = sessionId
     this.messages = messages
@@ -198,6 +199,7 @@ export class CodingAgentSnapshot {
     this.pendingApproval = pendingApproval
     this.error = error
     this.configured = configured
+    this.authState = authState
   }
 }
 

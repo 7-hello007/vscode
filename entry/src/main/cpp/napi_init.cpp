@@ -1,4 +1,5 @@
 #include "napi/native_api.h"
+#include "include/napi_codex_runtime.hpp"
 #include <assert.h>
 #include <cerrno>
 #include <cstdint>
@@ -1210,6 +1211,10 @@ static napi_value Init(napi_env env, napi_value exports) {
 
     // Register the Phase A local inference lifecycle bridge.
     registerLocalInferenceFunctions(env, exports);
+
+    // Stream the build-time extracted Codex ELF from rawfile without exposing
+    // the enclosing HAP file descriptor to ArkTS.
+    registerCodexRuntimeFunctions(env, exports);
 
     return exports;
 }

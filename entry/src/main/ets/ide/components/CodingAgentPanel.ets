@@ -10,11 +10,9 @@ import {
   CodingAgentTask,
   CodingAgentToolActivity
 } from '../agent/CodingAgentContracts'
-import { CODEX_AGENT_PROVIDER_ID } from '../agent/CodexAgentProvider'
-import { codingAgentProviderRegistry } from '../agent/CodingAgentProviderRegistry'
+import { codexAgentProvider } from '../agent/CodexAgentProvider'
 
 const CODEX_PANEL_SUBSCRIBER = 'IDE.CodingAgentPanel'
-const codexAgentProvider = codingAgentProviderRegistry.find(CODEX_AGENT_PROVIDER_ID)!
 
 @Component
 export default struct CodingAgentPanel {
@@ -28,6 +26,7 @@ export default struct CodingAgentPanel {
   @State pendingApproval: CodingAgentApprovalRequest | null = null
   @State errorText: string = ''
   @State configured: boolean = false
+  @State authState: string = 'SIGNED_OUT'
   @State prompt: string = ''
   private snapshotListener = (snapshot: CodingAgentSnapshot): void => this.applySnapshot(snapshot)
 
@@ -47,6 +46,7 @@ export default struct CodingAgentPanel {
     this.pendingApproval = snapshot.pendingApproval
     this.errorText = snapshot.error
     this.configured = snapshot.configured
+    this.authState = snapshot.authState
   }
 
   private isBusy(): boolean {
@@ -105,11 +105,15 @@ export default struct CodingAgentPanel {
             .fontSize(12)
             .fontWeight(FontWeight.Medium)
             .fontColor('#D1A85A')
-          Text('需要可信 HiSH 后端与已登录的应用会话。OpenAI API Key 只能保存在服务端，' +
-            '不会写入 HAP、Preferences、日志或 Git。')
+          Text('使用系统浏览器登录 ChatGPT。HiSH 不保存 OpenAI API Key，也不会读取 Web AI Cookie。')
             .fontSize(10)
             .fontColor('#9DA6B3')
             .lineHeight(17)
+          Button(this.authState === 'SIGNING_IN' ? '正在登录…' : 'Sign in with ChatGPT',
+            { buttonStyle: ButtonStyleMode.TEXTUAL })
+            .fontSize(10)
+            .enabled(this.authState !== 'SIGNING_IN')
+            .onClick((): void => { void codexAgentProvider.signInWithChatGPT() })
         }
         .width('100%')
         .padding(10)
@@ -237,6 +241,11 @@ export default struct CodingAgentPanel {
           .fontSize(10)
           .enabled(this.isBusy())
           .onClick((): void => codexAgentProvider.stop())
+        if (this.configured) {
+          Button('Logout', { buttonStyle: ButtonStyleMode.TEXTUAL })
+            .fontSize(9)
+            .onClick((): void => { void codexAgentProvider.logoutChatGPT() })
+        }
         Blank()
         Text('Root: ' + this.projectRoot)
           .fontSize(8)

@@ -31,4 +31,8 @@
 # Local AI models and native build/cache outputs
 *.gguf
 /entry/src/main/resources/rawfile/models/
+/entry/src/main/resources/rawfile/codex/codex-aarch64-unknown-linux-musl
+/entry/src/main/resources/rawfile/codex/*.tar.gz
+/entry/src/main/resources/rawfile/codex/*.zst
+/entry/src/main/resources/rawfile/codex/*.zip
 /entry/src/main/cpp/third_party/llama.cpp/build*/

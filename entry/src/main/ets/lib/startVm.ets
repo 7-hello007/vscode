@@ -15,6 +15,7 @@ interface VmOptions {
   serialUnixSocket: string
   qmpUnixSocket: string
   qgaUnixSocket: string
+  codexUnixSocket: string
   sharedFolderReadonly: boolean
   init: string,
   vncEnabled: boolean
@@ -67,6 +68,10 @@ function startVm(options: VmOptions): boolean {
     '-chardev', 'socket,path=' + options.qgaUnixSocket + ',server=on,wait=off,id=qga0',
     '-device', 'virtserialport,chardev=qga0,bus=virtio-serial0.0,name=org.qemu.guest_agent.0'
   ]
+  const codex = [
+    '-chardev', 'socket,path=' + options.codexUnixSocket + ',server=on,wait=off,id=codex0',
+    '-device', 'virtserialport,chardev=codex0,bus=virtio-serial0.0,name=dev.hish.codex'
+  ]
 
   const sharedUserFolder = deviceInfo.deviceType !== '2in1' ? [] :
     ["-fsdev", "local,security_model=mapped-file,id=fsdev1,path=/storage/Users/currentUser", "-device",
@@ -91,6 +96,7 @@ function startVm(options: VmOptions): boolean {
     ...kernelParam,
     ...monitor,
     ...qga,
+    ...codex,
     ...vnc,
     ...sharedUserFolder
   ]
@@ -103,6 +109,9 @@ function startVm(options: VmOptions): boolean {
   }
   if (fs.accessSync(options.qgaUnixSocket, fs.AccessModeType.EXIST)) {
     fs.unlinkSync(options.qgaUnixSocket)
+  }
+  if (fs.accessSync(options.codexUnixSocket, fs.AccessModeType.EXIST)) {
+    fs.unlinkSync(options.codexUnixSocket)
   }
   if (!fs.accessSync(options.sharedFolder, fs.AccessModeType.EXIST)) {
     fs.mkdirSync(options.sharedFolder)

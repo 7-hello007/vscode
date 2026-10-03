@@ -14,11 +14,15 @@ import {
   CodingAgentToolCall,
   CodingAgentToolName
 } from './CodingAgentContracts'
-import CodexAgentTransport, {
+import { common } from '@kit.AbilityKit'
+import TrustedBackendTransport, {
   CodexAgentConnectionConfig,
   CodexAgentEvent,
-  CodexAgentSessionSnapshot
+  CodexAgentSessionSnapshot,
+  ICodexAgentTransport
 } from './CodexAgentTransport'
+import CodexAppServerTransport from './CodexAppServerTransport'
+import { chatGPTOAuthService, ChatGPTAuthState } from './ChatGPTOAuthService'
 import HiSHAgentToolBridge from './HiSHAgentToolBridge'
 
 export const CODEX_AGENT_PROVIDER_ID = 'hish.agent.codex'
@@ -35,7 +39,10 @@ class CodingAgentSubscription {
 
 /** Durable Codex session controller; UI/provider switching does not recreate it. */
 export default class CodexAgentProvider implements CodingAgentProvider {
-  private transport: CodexAgentTransport = new CodexAgentTransport()
+  private transport: ICodexAgentTransport | null = null
+  private trustedBackend: TrustedBackendTransport = new TrustedBackendTransport()
+  private appServerTransport: CodexAppServerTransport | null = null
+  private initialized: boolean = false
   private toolBridge: HiSHAgentToolBridge | null = null
   private state: CodingAgentState = CodingAgentState.IDLE
   private sessionId: string = ''
@@ -53,8 +60,50 @@ export default class CodexAgentProvider implements CodingAgentProvider {
   private loopRunning: boolean = false
   private assistantMessageId: string = ''
 
+  async initialize(context: common.UIAbilityContext): Promise<void> {
+    if (this.initialized) return
+    await chatGPTOAuthService.initialize(context)
+    this.appServerTransport = new CodexAppServerTransport(context, chatGPTOAuthService)
+    this.transport = this.appServerTransport
+    this.initialized = true
+    chatGPTOAuthService.subscribe((state: ChatGPTAuthState, message: string): void => {
+      if (state === ChatGPTAuthState.ERROR && message) this.error = message
+      this.notify()
+    })
+    this.notify()
+  }
+
+  async signInWithChatGPT(): Promise<void> {
+    if (!this.initialized || !this.appServerTransport) throw new Error('CODEX_PROVIDER_NOT_INITIALIZED')
+    this.error = ''
+    this.notify()
+    try {
+      await chatGPTOAuthService.signIn()
+      this.transport = this.appServerTransport
+      this.state = CodingAgentState.IDLE
+      this.notify()
+    } catch (error) {
+      this.state = CodingAgentState.FAILED
+      this.error = this.errorMessage(error, 'OAUTH_SIGN_IN_FAILED')
+      this.notify()
+    }
+  }
+
+  async logoutChatGPT(): Promise<void> {
+    this.loopRevision++
+    if (this.appServerTransport) await this.appServerTransport.shutdown()
+    await chatGPTOAuthService.logout()
+    this.sessionId = ''
+    this.cursor = ''
+    this.state = CodingAgentState.IDLE
+    this.error = ''
+    this.clearPendingApproval()
+    this.notify()
+  }
+
   configure(config: CodexAgentConnectionConfig): void {
-    this.transport.configure(config)
+    this.trustedBackend.configure(config)
+    this.transport = this.trustedBackend
     this.error = ''
     this.notify()
   }
@@ -65,7 +114,8 @@ export default class CodexAgentProvider implements CodingAgentProvider {
   }
 
   clearCredentials(): void {
-    this.transport.clearCredentials()
+    this.trustedBackend.clearCredentials()
+    this.transport = this.appServerTransport
     this.loopRevision++
     this.state = CodingAgentState.IDLE
     this.error = 'NOT_CONFIGURED'
@@ -73,11 +123,11 @@ export default class CodexAgentProvider implements CodingAgentProvider {
   }
 
   getInfo(): CodingAgentProviderInfo {
-    if (this.transport.isConfigured()) {
+    if (this.transport && this.transport.isConfigured()) {
       return new CodingAgentProviderInfo(CODEX_AGENT_PROVIDER_ID, 'Codex', true)
     }
     return new CodingAgentProviderInfo(CODEX_AGENT_PROVIDER_ID, 'Codex', false,
-      'NOT_CONFIGURED：需要可信 HiSH 后端登录会话；OpenAI API Key 仅保存在服务端。')
+      'NOT_CONFIGURED：请使用 ChatGPT 账号登录。')
   }
 
   getState(): CodingAgentState {
@@ -86,7 +136,8 @@ export default class CodexAgentProvider implements CodingAgentProvider {
 
   getSnapshot(): CodingAgentSnapshot {
     return new CodingAgentSnapshot(this.state, this.sessionId, this.messages.slice(),
-      this.activities.slice(), this.pendingApproval, this.error, this.transport.isConfigured())
+      this.activities.slice(), this.pendingApproval, this.error,
+      this.transport !== null && this.transport.isConfigured(), chatGPTOAuthService.getState())
   }
 
   subscribe(id: string, listener: CodingAgentListener): void {
@@ -104,7 +155,7 @@ export default class CodexAgentProvider implements CodingAgentProvider {
   }
 
   async start(task: CodingAgentTask): Promise<CodingAgentStartResult> {
-    if (!this.transport.isConfigured()) {
+    if (!this.transport || !this.transport.isConfigured()) {
       this.state = CodingAgentState.FAILED
       this.error = 'NOT_CONFIGURED'
       this.notify()
@@ -130,11 +181,11 @@ export default class CodexAgentProvider implements CodingAgentProvider {
     try {
       const input = this.buildAuthorizedPrompt(task)
       if (!this.sessionId) {
-        const result = await this.transport.createSession(input, task.context.projectRoot)
+        const result = await this.requireTransport().createSession(input, task.context.projectRoot)
         this.sessionId = result.id
         this.cursor = result.cursor
       } else {
-        await this.transport.sendMessage(this.sessionId, input)
+        await this.requireTransport().sendMessage(this.sessionId, input)
       }
       this.startEventLoop()
       return new CodingAgentStartResult(this.sessionId, this.state, 'in_progress')
@@ -157,7 +208,7 @@ export default class CodexAgentProvider implements CodingAgentProvider {
     this.notify()
     try {
       const output = await this.toolBridge.applyApproved(approval)
-      await this.transport.submitToolResult(this.sessionId, call, true, output, '')
+      await this.requireTransport().submitToolResult(this.sessionId, call, true, output, '')
       this.handledCallIds.push(call.callId)
       this.updateActivity(call.callId, CodingAgentToolActivityStatus.SUCCEEDED, '已批准并完成')
       this.clearPendingApproval()
@@ -179,7 +230,7 @@ export default class CodexAgentProvider implements CodingAgentProvider {
     if (!this.pendingApproval || !this.pendingToolCall || this.pendingApproval.id !== requestId ||
       !this.sessionId) return
     const call = this.pendingToolCall
-    await this.transport.submitToolResult(this.sessionId, call, false, '', 'USER_REJECTED')
+    await this.requireTransport().submitToolResult(this.sessionId, call, false, '', 'USER_REJECTED')
     this.handledCallIds.push(call.callId)
     this.updateActivity(call.callId, CodingAgentToolActivityStatus.REJECTED, '用户拒绝')
     this.clearPendingApproval()
@@ -193,7 +244,7 @@ export default class CodexAgentProvider implements CodingAgentProvider {
     this.state = CodingAgentState.STOPPED
     this.clearPendingApproval()
     this.notify()
-    if (this.sessionId && this.transport.isConfigured()) {
+    if (this.sessionId && this.transport && this.transport.isConfigured()) {
       void this.cancelRemoteSession(this.sessionId)
     }
   }
@@ -210,7 +261,7 @@ export default class CodexAgentProvider implements CodingAgentProvider {
     try {
       while (revision === this.loopRevision && this.sessionId && !this.pendingApproval) {
         try {
-          const batch = await this.transport.pollEvents(this.sessionId, this.cursor)
+          const batch = await this.requireTransport().pollEvents(this.sessionId, this.cursor)
           failures = 0
           this.cursor = batch.nextCursor
           for (const event of batch.events) {
@@ -275,7 +326,7 @@ export default class CodexAgentProvider implements CodingAgentProvider {
       this.notify()
       try {
         const output = await this.toolBridge.executeReadTool(call)
-        await this.transport.submitToolResult(this.sessionId, call, true, output, '')
+        await this.requireTransport().submitToolResult(this.sessionId, call, true, output, '')
         this.handledCallIds.push(call.callId)
         this.updateActivity(call.callId, CodingAgentToolActivityStatus.SUCCEEDED, '读取完成')
       } catch (error) {
@@ -304,7 +355,7 @@ export default class CodexAgentProvider implements CodingAgentProvider {
   private async recoverSession(): Promise<boolean> {
     if (!this.sessionId) return false
     try {
-      const snapshot = await this.transport.retrieveSession(this.sessionId)
+      const snapshot = await this.requireTransport().retrieveSession(this.sessionId)
       this.cursor = snapshot.cursor || this.cursor
       this.applyRemoteStatus(snapshot)
       if (snapshot.requiredActions.length > 0 && !this.pendingApproval) {
@@ -334,13 +385,13 @@ export default class CodexAgentProvider implements CodingAgentProvider {
 
   private async submitToolFailure(call: CodingAgentToolCall, message: string): Promise<void> {
     if (!this.sessionId) return
-    await this.transport.submitToolResult(this.sessionId, call, false, '', message)
+    await this.requireTransport().submitToolResult(this.sessionId, call, false, '', message)
     this.handledCallIds.push(call.callId)
   }
 
   private async cancelRemoteSession(sessionId: string): Promise<void> {
     try {
-      await this.transport.cancel(sessionId)
+      await this.requireTransport().cancel(sessionId)
     } catch (error) {
       this.error = this.errorMessage(error, 'CODEX_CANCEL_FAILED')
       this.notify()
@@ -438,6 +489,11 @@ export default class CodexAgentProvider implements CodingAgentProvider {
     return new Promise<void>((resolve): void => {
       setTimeout(resolve, ms)
     })
+  }
+
+  private requireTransport(): ICodexAgentTransport {
+    if (!this.transport) throw new Error('CODEX_PROVIDER_NOT_INITIALIZED')
+    return this.transport
   }
 }
 

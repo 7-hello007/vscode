@@ -152,6 +152,7 @@ export default class EntryAbility extends UIAbility {
     const serialUnixSocket = appTempDir + '/serial_socket'
     const qmpUnixSocket = appTempDir + '/qmp_socket'
     const qgaUnixSocket = appTempDir + '/qga_socket'
+    const codexUnixSocket = appTempDir + '/codex_socket'
 
     AppStorage.setOrCreate(appOption.currentRunningEmulator, emulatorToStart.id)
 
@@ -174,6 +175,7 @@ export default class EntryAbility extends UIAbility {
       init,
       qmpUnixSocket,
       qgaUnixSocket,
+      codexUnixSocket,
       vncEnabled,
       vncPortMode,
       vncPort

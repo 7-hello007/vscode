@@ -175,6 +175,8 @@ export default struct IDEWorkbench {
   aboutToAppear(): void {
     codexAgentProvider.attachToolBridge(this.agentToolBridge)
     this.agentToolBridge.setProjectRoot(this.fileTreeRootPath)
+    const abilityContext = this.getUIContext().getHostContext() as common.UIAbilityContext
+    if (abilityContext) void codexAgentProvider.initialize(abilityContext)
     this.initializePlugins()
     this.sessionRestoreCancelled = false
     terminalLifecycleBridge.subscribe(IDE_TERMINAL_READY_SUBSCRIBER, this.terminalReadyListener)

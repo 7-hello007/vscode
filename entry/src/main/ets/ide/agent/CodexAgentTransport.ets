@@ -72,6 +72,19 @@ export class CodexAgentSessionSnapshot {
   }
 }
 
+/** Common transport contract. The app-server transport is the default while
+ * this file remains the trusted-backend fallback. */
+export interface ICodexAgentTransport {
+  isConfigured(): boolean
+  createSession(prompt: string, projectRoot: string): Promise<CodexAgentSessionResult>
+  sendMessage(sessionId: string, prompt: string): Promise<void>
+  pollEvents(sessionId: string, cursor: string): Promise<CodexAgentEventBatch>
+  retrieveSession(sessionId: string): Promise<CodexAgentSessionSnapshot>
+  submitToolResult(sessionId: string, call: CodingAgentToolCall,
+    success: boolean, output: string, error: string): Promise<void>
+  cancel(sessionId: string): Promise<void>
+}
+
 interface BackendToolCallPayload {
   turn_id?: string
   call_id?: string
@@ -166,7 +179,7 @@ const AGENT_TOOL_NAMES: string[] = [
  * POST /v1/hish/codex/sessions/{id}/tool-results
  * POST /v1/hish/codex/sessions/{id}/cancel
  */
-export default class CodexAgentTransport {
+export default class TrustedBackendTransport implements ICodexAgentTransport {
   private config: CodexAgentConnectionConfig | null = null
 
   configure(config: CodexAgentConnectionConfig): void {

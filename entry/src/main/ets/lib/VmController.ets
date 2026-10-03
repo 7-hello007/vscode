@@ -301,6 +301,7 @@ export class VmController {
           appTempDir + '/qmp_socket',
           appTempDir + '/qmp_socket_ui',
           appTempDir + '/qga_socket',
+          appTempDir + '/codex_socket',
           appTempDir + '/serial_socket'
         ];
         socketFiles.forEach(path => {
@@ -333,6 +334,7 @@ export class VmController {
         qmpUnixSocket: appTempDir + '/qmp_socket',
         qmpUnixSocketUI: appTempDir + '/qmp_socket_ui',
         qgaUnixSocket: appTempDir + '/qga_socket',
+        codexUnixSocket: appTempDir + '/codex_socket',
         vncWebSocketPort: vncPort,
         dataDiskPath: dataDiskPath
       });
@@ -457,7 +459,8 @@ export class VmController {
         // 强杀后物理清理 Socket 文件（沉降机制）
         const socketFiles = [
           appTempDir + '/qmp_socket',
-          appTempDir + '/qga_socket'
+          appTempDir + '/qga_socket',
+          appTempDir + '/codex_socket'
         ];
         socketFiles.forEach(s => {
           try {

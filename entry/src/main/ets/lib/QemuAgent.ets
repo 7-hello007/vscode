@@ -21,6 +21,7 @@ interface QGAArguments {
   'capture-output'?: boolean
   pid?: number
   signal?: number
+  env?: string[]
 }
 
 // QGA JSON-RPC 响应接口  
@@ -389,25 +390,19 @@ export class QemuAgent {
   }
 
   /**
-   * QGA 流同步 (guest-sync-delimited)
-   * [优化] 在发送指令前发送 0xFF 字节以冲刷缓冲区，并发送随机 ID 以同步
+   * QGA 流同步。
+   *
+   * The bundled guest agent accepts ordinary JSON commands but rejects the
+   * raw 0xFF prefix required by guest-sync-delimited after the host socket
+   * layer converts it to an invalid UTF-8 replacement character. Keep the
+   * existing request/response framing intact and use the JSON-only sync
+   * command that this guest supports.
    */
   private async sync(): Promise<boolean> {
     const syncToken = Math.floor(Math.random() * 2147483647)
 
     try {
-      if (this.client) {
-        // 1. 发送 0xFF 字符流引导，强制 Guest 端重置 JSON 解析器
-        const resetBuffer = new ArrayBuffer(1)
-        const view = new Uint8Array(resetBuffer)
-        view[0] = 0xFF
-        await this.client.send({ data: resetBuffer })
-        // 稍作延迟让对端处理
-        await new Promise<void>(resolve => setTimeout(resolve, 100))
-      }
-
-      // 2. 发送同步指令并验证返回 ID
-      const response = await this.sendCommand<number>('guest-sync-delimited', { id: syncToken })
+      const response = await this.sendCommand<number>('guest-sync', { id: syncToken })
       return response !== null && response === syncToken
     } catch (e) {
       hilog.error(DOMAIN, 'QemuAgent', 'QGA 流同步异常: %{public}s', JSON.stringify(e))
@@ -489,6 +484,20 @@ export class QemuAgent {
     if (result && typeof result === 'object') {
       return result['pid'] || null
     }
+    return null
+  }
+
+  /** Starts a guest process without capturing stdio. Used by isolated runtime
+   * adapters whose stdio is attached to a dedicated virtio channel. */
+  async execDetached(path: string, args?: string[], env?: string[]): Promise<number | null> {
+    const execArgs: QGAArguments = {
+      path: path,
+      'capture-output': false
+    }
+    if (args) execArgs.arg = args
+    if (env) execArgs.env = env
+    const result = await this.sendCommand<Record<string, number>>('guest-exec', execArgs)
+    if (result && typeof result === 'object') return result['pid'] || null
     return null
   }
 
